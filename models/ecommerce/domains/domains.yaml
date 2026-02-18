@@ -1,0 +1,72 @@
+# Domain Definitions
+# Reusable value sets and validation rules
+
+domains:
+  - domain_id: customer_tier
+    name: Customer Tier
+    description: Customer loyalty tier classification
+    data_type: varchar(20)
+    values:
+      - value: BRONZE
+        description: Entry level tier
+      - value: SILVER
+        description: Mid-level tier
+      - value: GOLD
+        description: Premium tier
+      - value: PLATINUM
+        description: Top tier (invite only)
+
+  - domain_id: order_status
+    name: Order Status
+    description: Valid order statuses
+    data_type: varchar(20)
+    values:
+      - value: PENDING
+        description: Order received, awaiting processing
+      - value: CONFIRMED
+        description: Order confirmed and being prepared
+      - value: SHIPPED
+        description: Order has been shipped
+      - value: DELIVERED
+        description: Order delivered to customer
+      - value: COMPLETED
+        description: Order completed and finalized
+      - value: CANCELLED
+        description: Order was cancelled
+
+  - domain_id: payment_method
+    name: Payment Method
+    description: Supported payment methods
+    data_type: varchar(20)
+    values:
+      - value: CREDIT_CARD
+        description: Credit or debit card
+      - value: PAYPAL
+        description: PayPal payment
+      - value: BANK_TRANSFER
+        description: Direct bank transfer
+      - value: CRYPTO
+        description: Cryptocurrency payment
+
+  - domain_id: product_category
+    name: Product Category
+    description: Product categories
+    data_type: varchar(50)
+    values:
+      - value: Electronics
+      - value: Furniture
+      - value: Accessories
+      - value: Clothing
+      - value: Books
+
+  - domain_id: country_code
+    name: Country Code
+    description: ISO 3166-1 alpha-2 country codes
+    data_type: varchar(2)
+    validation_pattern: "^[A-Z]{2}$"
+    examples:
+      - US
+      - UK
+      - CA
+      - DE
+      - NL

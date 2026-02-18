@@ -1,0 +1,61 @@
+# Customer Entity - Logical Layer
+# Defines attributes, keys, and relationships
+
+entity_id: customer
+name: Customer
+description: Customer master data with tier classification
+stereotype: dim_scd2
+layer: business
+
+attributes:
+  - attribute_id: customer_id
+    name: Customer ID
+    description: Unique identifier for the customer
+    data_type: integer
+    is_primary_key: true
+    is_nullable: false
+
+  - attribute_id: customer_name
+    name: Customer Name
+    description: Full name of the customer
+    data_type: varchar(100)
+    is_nullable: false
+
+  - attribute_id: email
+    name: Email Address
+    description: Primary email address
+    data_type: varchar(255)
+    is_nullable: true
+    pii_classification: email
+
+  - attribute_id: signup_date
+    name: Signup Date
+    description: Date when customer registered
+    data_type: date
+    is_nullable: false
+
+  - attribute_id: tier
+    name: Customer Tier
+    description: Loyalty tier classification
+    data_type: varchar(20)
+    is_nullable: false
+    domain: customer_tier
+
+  - attribute_id: country
+    name: Country
+    description: Customer country code
+    data_type: varchar(2)
+    is_nullable: true
+    domain: country_code
+
+relationships:
+  - relationship_id: customer_orders
+    name: Customer Orders
+    description: Orders placed by this customer
+    target_entity: order
+    cardinality: one_to_many
+    foreign_key_attribute: customer_id
+
+tags:
+  - master_data
+  - pii

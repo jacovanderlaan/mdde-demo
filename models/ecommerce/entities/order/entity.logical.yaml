@@ -1,0 +1,70 @@
+# Order Entity - Logical Layer
+
+entity_id: order
+name: Order
+description: Order header with status and payment information
+stereotype: dim_fact
+layer: business
+
+attributes:
+  - attribute_id: order_id
+    name: Order ID
+    description: Unique identifier for the order
+    data_type: integer
+    is_primary_key: true
+    is_nullable: false
+
+  - attribute_id: customer_id
+    name: Customer ID
+    description: Reference to customer who placed the order
+    data_type: integer
+    is_nullable: false
+    is_foreign_key: true
+    references:
+      entity: customer
+      attribute: customer_id
+
+  - attribute_id: order_date
+    name: Order Date
+    description: Date when order was placed
+    data_type: date
+    is_nullable: false
+
+  - attribute_id: status
+    name: Order Status
+    description: Current status of the order
+    data_type: varchar(20)
+    is_nullable: false
+    domain: order_status
+
+  - attribute_id: payment_method
+    name: Payment Method
+    description: Method used for payment
+    data_type: varchar(20)
+    is_nullable: false
+    domain: payment_method
+
+  - attribute_id: total_amount
+    name: Total Amount
+    description: Total order amount including all items
+    data_type: decimal(12,2)
+    is_nullable: true
+    is_derived: true
+    derivation_logic: SUM(order_item.quantity * order_item.unit_price)
+
+relationships:
+  - relationship_id: order_customer
+    name: Order Customer
+    target_entity: customer
+    cardinality: many_to_one
+    foreign_key_attribute: customer_id
+
+  - relationship_id: order_items
+    name: Order Items
+    target_entity: order_item
+    cardinality: one_to_many
+    foreign_key_attribute: order_id
+
+tags:
+  - transactional
+  - fact

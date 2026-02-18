@@ -1,0 +1,73 @@
+# Order Item Entity - Logical Layer
+
+entity_id: order_item
+name: Order Item
+description: Individual line items within an order
+stereotype: dim_fact
+layer: business
+
+attributes:
+  - attribute_id: item_id
+    name: Item ID
+    description: Unique identifier for the line item
+    data_type: integer
+    is_primary_key: true
+    is_nullable: false
+
+  - attribute_id: order_id
+    name: Order ID
+    description: Reference to parent order
+    data_type: integer
+    is_nullable: false
+    is_foreign_key: true
+    references:
+      entity: order
+      attribute: order_id
+
+  - attribute_id: product_id
+    name: Product ID
+    description: Reference to product
+    data_type: integer
+    is_nullable: false
+    is_foreign_key: true
+    references:
+      entity: product
+      attribute: product_id
+
+  - attribute_id: quantity
+    name: Quantity
+    description: Number of units ordered
+    data_type: integer
+    is_nullable: false
+    default_value: 1
+
+  - attribute_id: unit_price
+    name: Unit Price
+    description: Price per unit at time of order
+    data_type: decimal(10,2)
+    is_nullable: false
+
+  - attribute_id: line_total
+    name: Line Total
+    description: Total for this line item
+    data_type: decimal(12,2)
+    is_nullable: true
+    is_derived: true
+    derivation_logic: quantity * unit_price
+
+relationships:
+  - relationship_id: item_order
+    name: Parent Order
+    target_entity: order
+    cardinality: many_to_one
+    foreign_key_attribute: order_id
+
+  - relationship_id: item_product
+    name: Product
+    target_entity: product
+    cardinality: many_to_one
+    foreign_key_attribute: product_id
+
+tags:
+  - transactional
+  - fact_detail

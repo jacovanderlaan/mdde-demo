@@ -1,0 +1,25 @@
+# MDDE Model Definition
+# E-commerce Demo Model
+
+model_id: ecommerce_demo
+name: E-commerce Demo
+description: Sample e-commerce data model demonstrating MDDE concepts
+version: 1.0.0
+
+layers:
+  - source
+  - staging
+  - integration
+  - business
+
+default_schema_mapping:
+  source: raw
+  staging: staging
+  integration: integration
+  business: business
+
+entities:
+  - customer
+  - order
+  - order_item
+  - product

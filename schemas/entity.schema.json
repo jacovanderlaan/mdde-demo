@@ -1,0 +1,159 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://mdde.io/schemas/entity.schema.json",
+  "title": "MDDE Entity Schema",
+  "description": "Schema for MDDE entity definition files",
+  "type": "object",
+  "required": ["entity_id", "name"],
+  "properties": {
+    "entity_id": {
+      "type": "string",
+      "description": "Unique identifier for the entity (snake_case)",
+      "pattern": "^[a-z][a-z0-9_]*$"
+    },
+    "name": {
+      "type": "string",
+      "description": "Display name for the entity"
+    },
+    "description": {
+      "type": "string",
+      "description": "Description of the entity's purpose"
+    },
+    "stereotype": {
+      "type": "string",
+      "description": "Architectural pattern stereotype",
+      "enum": [
+        "dv_hub", "dv_link", "dv_satellite", "dv_pit", "dv_bridge",
+        "dim_fact", "dim_dimension", "dim_scd1", "dim_scd2", "dim_reference", "dim_bridge",
+        "stg_raw", "stg_cleaned", "stg_persistent",
+        "del_api", "del_report", "del_view",
+        "src_external"
+      ]
+    },
+    "layer": {
+      "type": "string",
+      "description": "Data layer where entity resides",
+      "enum": ["source", "staging", "integration", "business", "delivery"]
+    },
+    "attributes": {
+      "type": "array",
+      "description": "List of entity attributes",
+      "items": {
+        "$ref": "#/$defs/attribute"
+      }
+    },
+    "relationships": {
+      "type": "array",
+      "description": "List of relationships to other entities",
+      "items": {
+        "$ref": "#/$defs/relationship"
+      }
+    },
+    "tags": {
+      "type": "array",
+      "description": "Tags for categorization",
+      "items": {
+        "type": "string"
+      }
+    }
+  },
+  "$defs": {
+    "attribute": {
+      "type": "object",
+      "required": ["attribute_id", "name", "data_type"],
+      "properties": {
+        "attribute_id": {
+          "type": "string",
+          "description": "Unique identifier for the attribute (snake_case)",
+          "pattern": "^[a-z][a-z0-9_]*$"
+        },
+        "name": {
+          "type": "string",
+          "description": "Display name for the attribute"
+        },
+        "description": {
+          "type": "string",
+          "description": "Description of the attribute"
+        },
+        "data_type": {
+          "type": "string",
+          "description": "Data type (e.g., integer, varchar(100), decimal(10,2))"
+        },
+        "is_primary_key": {
+          "type": "boolean",
+          "default": false
+        },
+        "is_foreign_key": {
+          "type": "boolean",
+          "default": false
+        },
+        "is_nullable": {
+          "type": "boolean",
+          "default": true
+        },
+        "is_derived": {
+          "type": "boolean",
+          "description": "Whether this attribute is calculated",
+          "default": false
+        },
+        "derivation_logic": {
+          "type": "string",
+          "description": "SQL expression for derived attributes"
+        },
+        "default_value": {
+          "description": "Default value for the attribute"
+        },
+        "domain": {
+          "type": "string",
+          "description": "Reference to a domain for validation"
+        },
+        "pii_classification": {
+          "type": "string",
+          "description": "PII classification type",
+          "enum": ["email", "phone", "address", "name", "ssn", "credit_card", "ip_address"]
+        },
+        "references": {
+          "type": "object",
+          "description": "Foreign key reference",
+          "properties": {
+            "entity": {
+              "type": "string"
+            },
+            "attribute": {
+              "type": "string"
+            }
+          }
+        }
+      }
+    },
+    "relationship": {
+      "type": "object",
+      "required": ["relationship_id", "target_entity", "cardinality"],
+      "properties": {
+        "relationship_id": {
+          "type": "string",
+          "description": "Unique identifier for the relationship"
+        },
+        "name": {
+          "type": "string",
+          "description": "Display name for the relationship"
+        },
+        "description": {
+          "type": "string"
+        },
+        "target_entity": {
+          "type": "string",
+          "description": "Target entity of the relationship"
+        },
+        "cardinality": {
+          "type": "string",
+          "enum": ["one_to_one", "one_to_many", "many_to_one", "many_to_many"]
+        },
+        "foreign_key_attribute": {
+          "type": "string",
+          "description": "Attribute used as foreign key"
+        }
+      }
+    }
+  }
+}

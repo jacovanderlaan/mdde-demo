@@ -1,0 +1,52 @@
+# Product Entity - Logical Layer
+
+entity_id: product
+name: Product
+description: Product catalog with categories and pricing
+stereotype: dim_dimension
+layer: business
+
+attributes:
+  - attribute_id: product_id
+    name: Product ID
+    description: Unique identifier for the product
+    data_type: integer
+    is_primary_key: true
+    is_nullable: false
+
+  - attribute_id: product_name
+    name: Product Name
+    description: Display name of the product
+    data_type: varchar(200)
+    is_nullable: false
+
+  - attribute_id: category
+    name: Category
+    description: Product category
+    data_type: varchar(50)
+    is_nullable: false
+    domain: product_category
+
+  - attribute_id: unit_price
+    name: Unit Price
+    description: Current selling price
+    data_type: decimal(10,2)
+    is_nullable: false
+
+  - attribute_id: discount_rate
+    name: Discount Rate
+    description: Default discount percentage (0.00 to 1.00)
+    data_type: decimal(3,2)
+    is_nullable: true
+    default_value: 0.00
+
+relationships:
+  - relationship_id: product_order_items
+    name: Product Order Items
+    target_entity: order_item
+    cardinality: one_to_many
+    foreign_key_attribute: product_id
+
+tags:
+  - reference_data
+  - dimension
