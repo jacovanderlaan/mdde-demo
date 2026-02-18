@@ -14,12 +14,17 @@ Modules:
 - determinism: Non-deterministic SQL detection (critical for migrations)
 - dbt_generator: Generate dbt models from metadata
 - temporal: SCD2 pattern detection and generation
+- documenter: Markdown documentation generation
+- cte_normalizer: CTE extraction and SQL modularization
+- glossary: Business glossary management
+- datavault: Data Vault pattern detection
+- dimensional: Dimensional model generation
 
 Related articles: https://medium.com/@jaco.vanderlaan
 Repository: https://github.com/jacovanderlaan/mdde-demo
 """
 
-__version__ = "0.4.0"
+__version__ = "0.5.0"
 __author__ = "Jaco van der Laan"
 
 from .schema import create_schema, get_schema_info
@@ -30,3 +35,7 @@ from .determinism import check_determinism, DeterminismIssue, suggest_tie_breake
 from .dbt_generator import generate_dbt_project, generate_model_sql, DbtModel
 from .temporal import detect_scd_pattern, generate_scd2_merge, SCDPattern, SCDType
 from .documenter import generate_entity_docs, generate_lineage_doc
+from .cte_normalizer import normalize_to_ctes, suggest_cte_structure, NormalizationResult
+from .glossary import BusinessGlossary, GlossaryTerm, TermMapping
+from .datavault import detect_dv_construct, validate_dv_model, DVConstruct, DVConstructType
+from .dimensional import detect_dimensional_construct, generate_star_schema, DimensionalConstruct

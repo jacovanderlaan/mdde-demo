@@ -50,7 +50,11 @@ mdde-demo/
 │   ├── determinism.py       # Non-deterministic SQL detection
 │   ├── dbt_generator.py     # Generate dbt models from metadata
 │   ├── temporal.py          # SCD2 pattern detection and generation
-│   └── documenter.py        # Markdown documentation generation
+│   ├── documenter.py        # Markdown documentation generation
+│   ├── cte_normalizer.py    # CTE extraction and SQL modularization
+│   ├── glossary.py          # Business glossary management
+│   ├── datavault.py         # Data Vault pattern detection
+│   └── dimensional.py       # Dimensional model generation
 ├── examples/
 │   └── sales/               # Sample SQL files
 │       ├── customers.sql
@@ -291,7 +295,79 @@ stats = generate_entity_docs(conn, "generated/docs")
 lineage_md = generate_lineage_doc(conn, "dim_customer")
 ```
 
-### 10. SQL Regenerator
+### 10. CTE Normalizer
+
+Transform monolithic SQL into modular CTE-based queries:
+
+```python
+from src.mdde_lite.cte_normalizer import normalize_to_ctes, suggest_cte_structure
+
+# Get suggestions for restructuring
+suggestions = suggest_cte_structure(complex_sql)
+# ["Found 3 subquery(s): Consider extracting to named CTEs",
+#  "Table 'orders' referenced 3 times: Consider CTE for shared logic"]
+
+# Normalize to CTEs
+result = normalize_to_ctes(sql_with_subqueries)
+print(f"Extracted {result.ctes_extracted} CTEs")
+```
+
+### 11. Business Glossary
+
+Manage business terms and link them to technical metadata:
+
+```python
+from src.mdde_lite.glossary import BusinessGlossary, GlossaryTerm
+
+glossary = BusinessGlossary()
+
+glossary.add_term(GlossaryTerm(
+    term_id="revenue",
+    name="Revenue",
+    definition="Total income generated from sales",
+    category=TermCategory.METRIC,
+    synonyms=["Sales", "Income"]
+))
+
+# Search and generate documentation
+results = glossary.search_terms("sales")
+markdown = glossary.generate_glossary_markdown()
+```
+
+### 12. Data Vault Pattern Detection
+
+Detect and validate Data Vault patterns (Hub, Link, Satellite):
+
+```python
+from src.mdde_lite.datavault import detect_dv_construct, validate_dv_model
+
+# Detect construct type from table structure
+hub = detect_dv_construct("hub_customer", columns)
+print(f"Type: {hub.construct_type.value}")  # "hub"
+print(f"Business Keys: {hub.business_keys}")
+
+# Validate complete model
+report = validate_dv_model([hub, link, satellite])
+```
+
+### 13. Dimensional Model Generator
+
+Generate and detect dimensional model patterns:
+
+```python
+from src.mdde_lite.dimensional import detect_dimensional_construct, generate_star_schema
+
+# Detect fact/dimension from table structure
+fact = detect_dimensional_construct("fact_sales", columns)
+print(f"Measures: {[m.name for m in fact.measures]}")
+print(f"Grain: {fact.grain}")
+
+# Generate star schema from source entities
+schema = generate_star_schema(source_entities)
+print(f"Dimensions: {[d['name'] for d in schema['dimensions']]}")
+```
+
+### 14. SQL Regenerator
 
 Formats and transpiles SQL:
 
@@ -386,6 +462,10 @@ See [models/regulatory/](models/regulatory/) for complete models.
 | dbt generation | `dbt_generator.py` creates dbt projects | "Automating Dimensional Models with Metadata & dbt" |
 | SCD2 patterns | `temporal.py` detects/generates SCD2 | "Data Historization - Making Time a First-Class Citizen" |
 | Documentation | `documenter.py` generates markdown | "From Metadata to Living Documentation" |
+| CTE normalization | `cte_normalizer.py` modularizes SQL | "Modular SQL with CTEs: A Best Practice" |
+| Business glossary | `glossary.py` term management | "Integrating the Business Glossary" |
+| Data Vault | `datavault.py` Hub/Link/Sat detection | "From DataVault Tooling to Bi-Temporal SCD2" |
+| Dimensional | `dimensional.py` star schema generation | "Generating Dimensional Models Automatically" |
 | YAML models | Entity definitions | "From ERDs to Executable Metadata" |
 | ADRs | Decision documentation | N/A |
 
@@ -393,7 +473,6 @@ See [models/regulatory/](models/regulatory/) for complete models.
 
 The full MDDE framework includes features not in this demo:
 
-- Full optimizer pipeline with CTE normalization
 - Advanced UNION handling and dialect rendering
 - Complete 60+ table metadata schema
 - VS Code extension with visualization
