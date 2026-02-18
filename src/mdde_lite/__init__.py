@@ -12,12 +12,14 @@ Modules:
 - diagrams: Mermaid diagram generation (ERD, data flow, lineage)
 - lineage: Column-level lineage extraction
 - determinism: Non-deterministic SQL detection (critical for migrations)
+- dbt_generator: Generate dbt models from metadata
+- temporal: SCD2 pattern detection and generation
 
 Related articles: https://medium.com/@jaco.vanderlaan
 Repository: https://github.com/jacovanderlaan/mdde-demo
 """
 
-__version__ = "0.3.0"
+__version__ = "0.4.0"
 __author__ = "Jaco van der Laan"
 
 from .schema import create_schema, get_schema_info
@@ -25,3 +27,6 @@ from .optimizer import analyze_sql, analyze_file, analyze_directory, get_all_che
 from .diagrams import generate_erd, generate_dataflow, generate_lineage
 from .lineage import extract_lineage, ColumnLineage
 from .determinism import check_determinism, DeterminismIssue, suggest_tie_breakers
+from .dbt_generator import generate_dbt_project, generate_model_sql, DbtModel
+from .temporal import detect_scd_pattern, generate_scd2_merge, SCDPattern, SCDType
+from .documenter import generate_entity_docs, generate_lineage_doc

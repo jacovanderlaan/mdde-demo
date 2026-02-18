@@ -47,7 +47,10 @@ mdde-demo/
 │   ├── generator.py         # SQL regenerator
 │   ├── diagrams.py          # Mermaid diagram generation
 │   ├── lineage.py           # Column-level lineage extraction
-│   └── determinism.py       # Non-deterministic SQL detection
+│   ├── determinism.py       # Non-deterministic SQL detection
+│   ├── dbt_generator.py     # Generate dbt models from metadata
+│   ├── temporal.py          # SCD2 pattern detection and generation
+│   └── documenter.py        # Markdown documentation generation
 ├── examples/
 │   └── sales/               # Sample SQL files
 │       ├── customers.sql
@@ -226,7 +229,69 @@ ROW_NUMBER() OVER (PARTITION BY region ORDER BY created_at, customer_id)
 
 See [ADR-004](docs/adr/ADR-004-deterministic-sql-patterns.md) and the [article on deterministic SQL](articles/the-hidden-danger-of-non-deterministic-sql.md) for details.
 
-### 7. SQL Regenerator
+### 7. dbt Model Generator
+
+Generate complete dbt projects from MDDE metadata:
+
+```python
+from src.mdde_lite.dbt_generator import generate_dbt_project
+
+# Generate dbt project structure
+stats = generate_dbt_project(conn, "generated/dbt", "my_project")
+
+# Creates:
+# - dbt_project.yml
+# - models/sources.yml
+# - models/staging/*.sql + schema.yml
+# - models/business/*.sql + schema.yml
+```
+
+Generated models include `{{ ref() }}` and `{{ source() }}` macros, proper materializations by layer, and schema.yml with column documentation.
+
+### 8. SCD2 Pattern Detection
+
+Detect and generate Slowly Changing Dimension patterns:
+
+```python
+from src.mdde_lite.temporal import detect_scd_pattern, generate_scd2_merge
+
+# Detect SCD pattern from column names
+columns = ["customer_sk", "customer_id", "name", "valid_from", "valid_to", "is_current"]
+pattern = detect_scd_pattern("dim_customer", columns)
+
+print(f"SCD Type: {pattern.scd_type.value}")  # type_2
+print(f"Bi-temporal: {pattern.is_bi_temporal}")
+print(f"Recommendations: {pattern.recommendations}")
+
+# Generate MERGE statement for SCD2 loads
+merge_sql = generate_scd2_merge(
+    target_table="dim_customer",
+    source_table="stg_customers",
+    natural_key_columns=["customer_id"],
+    tracking_columns=["name", "email", "region"]
+)
+```
+
+### 9. Documentation Generator
+
+Generate markdown documentation from metadata:
+
+```python
+from src.mdde_lite.documenter import generate_entity_docs, generate_lineage_doc
+
+# Generate complete documentation
+stats = generate_entity_docs(conn, "generated/docs")
+
+# Creates:
+# - index.md (overview by layer)
+# - data_dictionary.md (all attributes)
+# - {entity}.md (per-entity documentation with lineage)
+
+# Generate lineage-specific documentation
+lineage_md = generate_lineage_doc(conn, "dim_customer")
+```
+
+### 10. SQL Regenerator
 
 Formats and transpiles SQL:
 
@@ -318,6 +383,9 @@ See [models/regulatory/](models/regulatory/) for complete models.
 | SQL generation | `generator.py` formats/transpiles | "From YAML to SQL" |
 | Diagram generation | `diagrams.py` Mermaid output | "Diagram Generation & Auto-Docs" |
 | Column lineage | `lineage.py` traces columns | "Beyond the SELECT Clause" |
+| dbt generation | `dbt_generator.py` creates dbt projects | "Automating Dimensional Models with Metadata & dbt" |
+| SCD2 patterns | `temporal.py` detects/generates SCD2 | "Data Historization - Making Time a First-Class Citizen" |
+| Documentation | `documenter.py` generates markdown | "From Metadata to Living Documentation" |
 | YAML models | Entity definitions | "From ERDs to Executable Metadata" |
 | ADRs | Decision documentation | N/A |
 
