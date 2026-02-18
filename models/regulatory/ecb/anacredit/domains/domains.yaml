@@ -1,0 +1,126 @@
+# AnaCredit Domain Definitions
+# Based on ECB AnaCredit Regulation (EU) 2016/867
+
+domains:
+  # Identifier Domains
+  iso_4217_currency:
+    name: ISO 4217 Currency Code
+    description: Currency codes in accordance with ISO 4217 standard
+    data_type: char(3)
+    validation_type: pattern
+    pattern: "^[A-Z]{3}$"
+    examples: [EUR, USD, GBP, CHF, JPY]
+
+  iso_3166_country:
+    name: ISO 3166-1 Country Code
+    description: Country codes in accordance with ISO 3166-1 alpha-2 standard
+    data_type: char(2)
+    validation_type: pattern
+    pattern: "^[A-Z]{2}$"
+    examples: [NL, DE, FR, BE, IT]
+
+  # Instrument Type Domains
+  type_of_instrument:
+    name: Type of Instrument
+    description: Classification according to contractual terms
+    data_type: varchar(255)
+    validation_type: enumeration
+    values:
+      - value: DEPOSITS
+        description: Deposits other than reverse repurchase agreements
+      - value: OVERDRAFTS
+        description: Overdrafts
+      - value: CREDIT_CARD
+        description: Credit card debt
+      - value: REVOLVING_CREDIT
+        description: Revolving credit other than overdrafts and credit card debt
+      - value: CREDIT_LINES
+        description: Credit lines other than revolving credit
+      - value: REVERSE_REPO
+        description: Reverse repurchase agreements
+      - value: TRADE_RECEIVABLES
+        description: Trade receivables
+      - value: FINANCIAL_LEASES
+        description: Financial leases
+      - value: OTHER_LOANS
+        description: Other loans
+
+  amortisation_type:
+    name: Amortisation Type
+    description: Type of amortisation of the instrument
+    data_type: varchar(255)
+    validation_type: enumeration
+    values:
+      - value: FRENCH
+        description: French amortisation (constant instalments)
+      - value: GERMAN
+        description: German amortisation (constant principal)
+      - value: FIXED_SCHEDULE
+        description: Fixed amortisation schedule
+      - value: BULLET
+        description: Bullet repayment
+      - value: OTHER
+        description: Other amortisation type
+
+  interest_rate_type:
+    name: Interest Rate Type
+    description: Base rate for establishing interest rate
+    data_type: varchar(255)
+    validation_type: enumeration
+    values:
+      - value: FIXED
+        description: Fixed interest rate
+      - value: VARIABLE
+        description: Variable interest rate
+      - value: MIXED
+        description: Mixed interest rate
+
+  # Status Domains
+  default_status:
+    name: Default Status
+    description: Identification of default status
+    data_type: varchar(255)
+    validation_type: enumeration
+    values:
+      - value: NOT_IN_DEFAULT
+        description: Not in default
+      - value: DEFAULT_UNLIKELY_TO_PAY
+        description: Default because unlikely to pay
+      - value: DEFAULT_MORE_THAN_90_DAYS
+        description: Default because more than 90 days past due
+      - value: DEFAULT_BOTH
+        description: Default because both criteria
+
+  # Indicator Domains
+  protection_provider_indicator:
+    name: Protection Provider Indicator
+    description: Whether counterparty provides protection
+    data_type: varchar(50)
+    validation_type: enumeration
+    values:
+      - value: PROTECTION_PROVIDER
+        description: Is a protection provider
+      - value: NON_PROTECTION_PROVIDER
+        description: Is not a protection provider
+
+  legal_entity_indicator:
+    name: Legal Entity Indicator
+    description: Distinguishes legal entities from parts of entities
+    data_type: varchar(50)
+    validation_type: enumeration
+    values:
+      - value: LEGAL_ENTITY
+        description: Is a legal entity
+      - value: PART_OF_LEGAL_ENTITY
+        description: Is part of a legal entity
+
+  syndicated_contract_indicator:
+    name: Syndicated Contract Indicator
+    description: Whether contract is syndicated
+    data_type: varchar(50)
+    validation_type: enumeration
+    values:
+      - value: SYNDICATED
+        description: Syndicated contract
+      - value: NOT_SYNDICATED
+        description: Not a syndicated contract

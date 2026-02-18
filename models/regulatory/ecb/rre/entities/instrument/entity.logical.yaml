@@ -1,0 +1,172 @@
+entity:
+  entity_id: instrument
+  name: Instrument (RRE)
+  description: |
+    Instrument data specific to residential real estate lending.
+
+    This entity extends the AnaCredit instrument with RRE-specific attributes
+    including household income, loan-to-value ratios, and buy-to-let indicators.
+  layer: integration
+  stereotype: reg_critical_data
+  bcbs239_domain: aggregation
+
+attributes:
+  - attribute_id: reporting_agent_identifier
+    name: Reporting Agent Identifier
+    data_type: varchar(60)
+    is_primary_key: true
+    is_nullable: false
+
+  - attribute_id: contract_identifier
+    name: Contract Identifier
+    data_type: varchar(60)
+    is_primary_key: true
+    is_nullable: false
+
+  - attribute_id: instrument_identifier
+    name: Instrument Identifier
+    data_type: varchar(60)
+    is_primary_key: true
+    is_nullable: false
+
+  - attribute_id: observed_agent_identifier
+    name: Observed Agent Identifier
+    data_type: varchar(60)
+    is_primary_key: true
+    is_nullable: false
+
+  - attribute_id: reporting_reference_date
+    name: Reporting Reference Date
+    data_type: date
+    is_primary_key: true
+    is_nullable: false
+
+  - attribute_id: type_of_instrument
+    name: Type of Instrument
+    data_type: varchar(255)
+    is_nullable: false
+    domain: type_of_instrument
+
+  - attribute_id: inception_date
+    name: Inception Date of Instrument
+    data_type: date
+    is_nullable: false
+
+  - attribute_id: household_income_at_inception
+    name: Household Income at Inception
+    data_type: decimal(12,2)
+    is_nullable: false
+    description: |
+      The combined gross annual income of all debtors of the instrument
+      at the moment of inception. Used for debt-to-income calculations.
+
+  - attribute_id: loan_to_value_at_inception
+    name: Loan-to-Value at Inception
+    data_type: decimal(6,4)
+    is_nullable: true
+    description: |
+      The sum of all loans secured by the debtor on the immovable property
+      at inception (L) relative to the property value at inception (V).
+      Expressed as a ratio (e.g., 0.8500 for 85% LTV).
+
+  - attribute_id: commitment_amount_at_inception
+    name: Commitment Amount at Inception
+    data_type: decimal(12,2)
+    is_nullable: false
+    description: |
+      Maximum exposure to credit risk on the inception date. Amount in euro.
+
+  - attribute_id: outstanding_nominal_amount_at_inception
+    name: Outstanding Nominal Amount at Inception
+    data_type: decimal(12,2)
+    is_nullable: false
+    description: |
+      Principal amount outstanding at inception, net of write-offs.
+
+  - attribute_id: legal_final_maturity_date
+    name: Legal Final Maturity Date
+    data_type: date
+    is_nullable: false
+    description: |
+      The contractual maturity date, taking into account any amendments.
+
+  - attribute_id: legal_final_maturity_date_at_inception
+    name: Legal Final Maturity Date at Inception
+    data_type: date
+    is_nullable: true
+    description: |
+      The original contractual maturity date at inception.
+
+  - attribute_id: interest_rate_type
+    name: Interest Rate Type
+    data_type: varchar(255)
+    is_nullable: false
+    domain: interest_rate_type
+
+  - attribute_id: interest_rate_at_inception
+    name: Interest Rate at Inception
+    data_type: decimal(8,6)
+    is_nullable: false
+    description: |
+      The annualised agreed rate at the moment of inception.
+
+  - attribute_id: interest_rate_reset_frequency
+    name: Interest Rate Reset Frequency
+    data_type: varchar(255)
+    is_nullable: false
+    domain: interest_rate_reset_frequency
+
+  - attribute_id: amortisation_type
+    name: Amortisation Type
+    data_type: varchar(255)
+    is_nullable: false
+    domain: amortisation_type
+
+  - attribute_id: payment_frequency
+    name: Payment Frequency
+    data_type: varchar(255)
+    is_nullable: false
+    domain: payment_frequency
+
+  - attribute_id: currency_denomination
+    name: Currency Denomination
+    data_type: char(3)
+    is_nullable: false
+    domain: iso_4217_currency
+
+  - attribute_id: buy_to_let
+    name: Buy-to-Let Indicator
+    data_type: varchar(50)
+    is_nullable: false
+    domain: buy_to_let_indicator
+    description: |
+      Indicates whether the instrument was granted for buy-to-let purposes.
+
+  - attribute_id: bsi_class
+    name: BSI Asset Class
+    data_type: varchar(255)
+    is_nullable: false
+    description: |
+      The BSI asset class of the instrument in accordance with reporting
+      agent's own BSI reports.
+
+  - attribute_id: corep_class
+    name: COREP Class
+    data_type: varchar(255)
+    is_nullable: false
+    description: |
+      The class to which the instrument belongs for COREP reporting.
+
+  - attribute_id: product_name
+    name: Product Name
+    data_type: varchar(255)
+    is_nullable: false
+    description: |
+      The product name used by the creditor in the contractual agreement.
+
+  - attribute_id: product_label
+    name: Product Label
+    data_type: varchar(255)
+    is_nullable: false
+    description: |
+      The label of the credit institution under which the instrument was granted.

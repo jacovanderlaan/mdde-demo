@@ -1,0 +1,91 @@
+entity:
+  entity_id: accounting_data
+  name: Accounting Data
+  description: |
+    Accounting data contains the accounting-related information about instruments,
+    including carrying amounts, provisions, and impairment information.
+
+    This data is reported for IFRS and national GAAP compliant institutions.
+  layer: integration
+  stereotype: reg_risk_aggregation
+  bcbs239_domain: aggregation
+
+attributes:
+  - attribute_id: reporting_agent_identifier
+    name: Reporting Agent Identifier
+    data_type: varchar(60)
+    is_primary_key: true
+    is_nullable: false
+
+  - attribute_id: observed_agent_identifier
+    name: Observed Agent Identifier
+    data_type: varchar(60)
+    is_primary_key: true
+    is_nullable: false
+
+  - attribute_id: contract_identifier
+    name: Contract Identifier
+    data_type: varchar(60)
+    is_primary_key: true
+    is_nullable: false
+
+  - attribute_id: instrument_identifier
+    name: Instrument Identifier
+    data_type: varchar(60)
+    is_primary_key: true
+    is_nullable: false
+
+  - attribute_id: reporting_reference_date
+    name: Reporting Reference Date
+    data_type: date
+    is_primary_key: true
+    is_nullable: false
+
+  - attribute_id: accounting_classification
+    name: Accounting Classification
+    data_type: varchar(255)
+    is_nullable: false
+    domain: accounting_classification
+    description: |
+      Classification of instruments according to the portfolio in which they
+      are recorded for accounting purposes.
+
+  - attribute_id: carrying_amount
+    name: Carrying Amount
+    data_type: decimal(16,2)
+    is_nullable: false
+    description: |
+      The amount at which an asset or liability is recognised in the balance
+      sheet according to the relevant accounting rules. Amount in euro.
+
+  - attribute_id: accumulated_impairment_amount
+    name: Accumulated Impairment Amount
+    data_type: decimal(16,2)
+    is_nullable: true
+    description: |
+      The amount of loss allowances held against or allocated to the instrument.
+      Amount in euro.
+
+  - attribute_id: impairment_assessment_method
+    name: Impairment Assessment Method
+    data_type: varchar(255)
+    is_nullable: true
+    domain: impairment_assessment_method
+    description: |
+      The method used for assessing the impairment of the instrument.
+
+  - attribute_id: source_of_encumbrance
+    name: Source of Encumbrance
+    data_type: varchar(255)
+    is_nullable: true
+    domain: source_of_encumbrance
+    description: |
+      The type of transaction from which the encumbrance of the instrument stems.
+
+  - attribute_id: prudential_portfolio
+    name: Prudential Portfolio
+    data_type: varchar(255)
+    is_nullable: false
+    domain: prudential_portfolio
+    description: |
+      Portfolio allocation for prudential purposes.

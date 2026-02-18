@@ -1,0 +1,115 @@
+entity:
+  entity_id: financial_data
+  name: Financial Data
+  description: |
+    Financial data contains the balance and flow information about instruments,
+    including outstanding amounts, arrears, and interest rates.
+  layer: integration
+  stereotype: reg_risk_aggregation
+  bcbs239_domain: aggregation
+
+attributes:
+  - attribute_id: reporting_agent_identifier
+    name: Reporting Agent Identifier
+    data_type: varchar(60)
+    is_primary_key: true
+    is_nullable: false
+
+  - attribute_id: observed_agent_identifier
+    name: Observed Agent Identifier
+    data_type: varchar(60)
+    is_primary_key: true
+    is_nullable: false
+
+  - attribute_id: contract_identifier
+    name: Contract Identifier
+    data_type: varchar(60)
+    is_primary_key: true
+    is_nullable: false
+
+  - attribute_id: instrument_identifier
+    name: Instrument Identifier
+    data_type: varchar(60)
+    is_primary_key: true
+    is_nullable: false
+
+  - attribute_id: reporting_reference_date
+    name: Reporting Reference Date
+    data_type: date
+    is_primary_key: true
+    is_nullable: false
+
+  - attribute_id: outstanding_nominal_amount
+    name: Outstanding Nominal Amount
+    data_type: decimal(16,2)
+    is_nullable: false
+    description: |
+      Principal amount outstanding at the reporting reference date, including
+      unpaid past due interest but excluding accrued interest. Amount in euro.
+
+  - attribute_id: accrued_interest
+    name: Accrued Interest
+    data_type: decimal(16,2)
+    is_nullable: false
+    description: |
+      Amount of accrued interest on the instrument at the reporting reference
+      date. Amount in euro.
+
+  - attribute_id: off_balance_sheet_amount
+    name: Off-Balance Sheet Amount
+    data_type: decimal(16,2)
+    is_nullable: true
+    description: |
+      Total nominal amount of the off-balance sheet exposures. Amount in euro.
+
+  - attribute_id: arrears_for_instrument
+    name: Arrears for Instrument
+    data_type: decimal(16,2)
+    is_nullable: true
+    description: |
+      Total amount of principal and interest past due at the reporting reference
+      date. Amount in euro.
+
+  - attribute_id: date_of_past_due
+    name: Date of Past Due
+    data_type: date
+    is_nullable: true
+    description: |
+      The date on which the instrument became past due.
+
+  - attribute_id: interest_rate
+    name: Interest Rate
+    data_type: decimal(10,6)
+    is_nullable: false
+    description: |
+      Annualised agreed rate or narrowly defined interest rate at the reporting
+      reference date.
+
+  - attribute_id: next_interest_rate_reset_date
+    name: Next Interest Rate Reset Date
+    data_type: date
+    is_nullable: true
+    description: |
+      The date on which the next interest rate reset is scheduled.
+
+  - attribute_id: default_status
+    name: Default Status
+    data_type: varchar(255)
+    is_nullable: false
+    domain: default_status
+    description: |
+      Identification of default status of the instrument.
+
+  - attribute_id: date_of_default_status
+    name: Date of Default Status
+    data_type: date
+    is_nullable: true
+    description: |
+      The date on which the default status was assigned.
+
+  - attribute_id: transferred_amount
+    name: Transferred Amount
+    data_type: decimal(16,2)
+    is_nullable: true
+    description: |
+      The total transferred amount in case of securitisation. Amount in euro.

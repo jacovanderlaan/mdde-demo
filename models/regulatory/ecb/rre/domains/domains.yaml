@@ -1,0 +1,214 @@
+# RRE (Residential Real Estate) Domain Definitions
+# Extends AnaCredit domains with RRE-specific values
+
+domains:
+  # Reference Domains (shared with AnaCredit)
+  iso_4217_currency:
+    name: ISO 4217 Currency Code
+    data_type: char(3)
+    validation_type: pattern
+    pattern: "^[A-Z]{3}$"
+    examples: [EUR, USD, GBP]
+
+  iso_3166_country:
+    name: ISO 3166-1 Country Code
+    data_type: char(2)
+    validation_type: pattern
+    pattern: "^[A-Z]{2}$"
+    examples: [NL, DE, BE]
+
+  # RRE-Specific Domains
+  immovable_property_type:
+    name: Immovable Property Type
+    description: Classification of residential real estate
+    data_type: varchar(255)
+    validation_type: enumeration
+    values:
+      - value: RESIDENTIAL_FLAT
+        description: Residential flat or apartment
+      - value: RESIDENTIAL_HOUSE
+        description: Detached or semi-detached house
+      - value: RESIDENTIAL_TERRACED
+        description: Terraced house or row house
+      - value: MIXED_USE
+        description: Mixed residential and commercial use
+      - value: LAND_FOR_RESIDENTIAL
+        description: Land designated for residential construction
+      - value: OTHER_RESIDENTIAL
+        description: Other type of residential property
+
+  protection_valuation_type:
+    name: Protection Valuation Type
+    description: Method used for valuing property
+    data_type: varchar(255)
+    validation_type: enumeration
+    values:
+      - value: FULL_APPRAISAL
+        description: Full appraisal by licensed valuer
+      - value: DRIVE_BY
+        description: Drive-by or external inspection
+      - value: AUTOMATED_VALUATION
+        description: Automated valuation model (AVM)
+      - value: INDEXED
+        description: Value indexed from original appraisal
+      - value: PURCHASE_PRICE
+        description: Based on purchase price
+      - value: TAX_VALUE
+        description: Based on tax assessment value
+      - value: OTHER
+        description: Other valuation method
+
+  buy_to_let_indicator:
+    name: Buy-to-Let Indicator
+    description: Whether property is for buy-to-let purposes
+    data_type: varchar(50)
+    validation_type: enumeration
+    values:
+      - value: BUY_TO_LET
+        description: Instrument granted for buy-to-let
+      - value: OWNER_OCCUPIED
+        description: Property for owner occupation
+      - value: NOT_APPLICABLE
+        description: Not applicable
+
+  household_type:
+    name: Household Type
+    description: Classification of household composition
+    data_type: varchar(255)
+    validation_type: enumeration
+    values:
+      - value: SINGLE_PERSON
+        description: Single person household
+      - value: COUPLE_NO_CHILDREN
+        description: Couple without children
+      - value: COUPLE_WITH_CHILDREN
+        description: Couple with children
+      - value: SINGLE_PARENT
+        description: Single parent household
+      - value: MULTI_GENERATION
+        description: Multi-generational household
+      - value: OTHER
+        description: Other household type
+
+  employment_status:
+    name: Employment Status
+    description: Classification of employment status
+    data_type: varchar(255)
+    validation_type: enumeration
+    values:
+      - value: EMPLOYED_PERMANENT
+        description: Permanently employed
+      - value: EMPLOYED_TEMPORARY
+        description: Temporarily employed
+      - value: SELF_EMPLOYED
+        description: Self-employed
+      - value: RETIRED
+        description: Retired
+      - value: UNEMPLOYED
+        description: Unemployed
+      - value: STUDENT
+        description: Student
+      - value: OTHER
+        description: Other status
+
+  # Shared Indicator Domains
+  protection_provider_indicator:
+    name: Protection Provider Indicator
+    data_type: varchar(50)
+    validation_type: enumeration
+    values:
+      - value: PROTECTION_PROVIDER
+        description: Is a protection provider
+      - value: NON_PROTECTION_PROVIDER
+        description: Is not a protection provider
+
+  legal_entity_indicator:
+    name: Legal Entity Indicator
+    data_type: varchar(50)
+    validation_type: enumeration
+    values:
+      - value: LEGAL_ENTITY
+        description: Is a legal entity
+      - value: HOUSEHOLD
+        description: Is a household
+
+  # Rate and Frequency Domains
+  interest_rate_type:
+    name: Interest Rate Type
+    data_type: varchar(255)
+    validation_type: enumeration
+    values:
+      - value: FIXED
+        description: Fixed interest rate
+      - value: VARIABLE
+        description: Variable interest rate
+      - value: MIXED
+        description: Mixed (initial fixed, then variable)
+
+  interest_rate_reset_frequency:
+    name: Interest Rate Reset Frequency
+    data_type: varchar(255)
+    validation_type: enumeration
+    values:
+      - value: MONTHLY
+        description: Reset monthly
+      - value: QUARTERLY
+        description: Reset quarterly
+      - value: SEMI_ANNUALLY
+        description: Reset every 6 months
+      - value: ANNUALLY
+        description: Reset annually
+      - value: AT_2_YEARS
+        description: Reset every 2 years
+      - value: AT_3_YEARS
+        description: Reset every 3 years
+      - value: AT_5_YEARS
+        description: Reset every 5 years
+      - value: AT_10_YEARS
+        description: Reset every 10 years
+      - value: NOT_APPLICABLE
+        description: Not applicable (fixed rate)
+
+  amortisation_type:
+    name: Amortisation Type
+    data_type: varchar(255)
+    validation_type: enumeration
+    values:
+      - value: ANNUITY
+        description: Annuity (constant instalments)
+      - value: LINEAR
+        description: Linear (constant principal)
+      - value: BULLET
+        description: Bullet (principal at maturity)
+      - value: INTEREST_ONLY
+        description: Interest only
+      - value: OTHER
+        description: Other amortisation type
+
+  payment_frequency:
+    name: Payment Frequency
+    data_type: varchar(255)
+    validation_type: enumeration
+    values:
+      - value: MONTHLY
+        description: Monthly payments
+      - value: QUARTERLY
+        description: Quarterly payments
+      - value: SEMI_ANNUALLY
+        description: Semi-annual payments
+      - value: ANNUALLY
+        description: Annual payments
+      - value: AT_MATURITY
+        description: Payment at maturity
+
+  type_of_instrument:
+    name: Type of Instrument
+    data_type: varchar(255)
+    validation_type: enumeration
+    values:
+      - value: OTHER_LOANS
+        description: Other loans (includes mortgages)
+      - value: FINANCIAL_LEASES
+        description: Financial leases
+      - value: CREDIT_LINES
+        description: Credit lines

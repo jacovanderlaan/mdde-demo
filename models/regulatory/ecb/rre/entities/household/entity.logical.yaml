@@ -1,0 +1,61 @@
+entity:
+  entity_id: household
+  name: Household
+  description: |
+    A household is a counterparty type specific to RRE reporting.
+
+    Households are the primary borrowers for residential mortgages and
+    include natural persons and their dependents.
+  layer: integration
+  stereotype: reg_critical_data
+  bcbs239_domain: governance
+
+attributes:
+  - attribute_id: reporting_agent_identifier
+    name: Reporting Agent Identifier
+    data_type: varchar(60)
+    is_primary_key: true
+    is_nullable: false
+
+  - attribute_id: counterparty_identifier
+    name: Counterparty Identifier
+    data_type: varchar(60)
+    is_primary_key: true
+    is_nullable: false
+
+  - attribute_id: reporting_reference_date
+    name: Reporting Reference Date
+    data_type: date
+    is_primary_key: true
+    is_nullable: false
+
+  - attribute_id: household_type
+    name: Household Type
+    data_type: varchar(255)
+    is_nullable: false
+    domain: household_type
+    description: |
+      Classification of the household type (e.g., single, couple, family).
+
+  - attribute_id: number_of_household_members
+    name: Number of Household Members
+    data_type: integer
+    is_nullable: true
+    description: |
+      The number of members in the household.
+
+  - attribute_id: total_household_income
+    name: Total Household Income
+    data_type: decimal(12,2)
+    is_nullable: true
+    description: |
+      The combined gross annual income of all household members.
+      Amount in euro.
+
+  - attribute_id: employment_status_primary
+    name: Primary Employment Status
+    data_type: varchar(255)
+    is_nullable: true
+    domain: employment_status
+    description: |
+      Employment status of the primary income earner in the household.

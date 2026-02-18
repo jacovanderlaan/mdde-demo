@@ -1,0 +1,65 @@
+entity:
+  entity_id: natural_person
+  name: Natural Person
+  description: |
+    A natural person is an individual borrower within a household.
+
+    This entity captures individual-level information for mortgage borrowers,
+    including income and employment data.
+  layer: integration
+  stereotype: reg_critical_data
+  bcbs239_domain: governance
+  pii_classification: contains_pii
+
+attributes:
+  - attribute_id: reporting_agent_identifier
+    name: Reporting Agent Identifier
+    data_type: varchar(60)
+    is_primary_key: true
+    is_nullable: false
+
+  - attribute_id: counterparty_identifier
+    name: Counterparty Identifier
+    data_type: varchar(60)
+    is_primary_key: true
+    is_nullable: false
+
+  - attribute_id: natural_person_identifier
+    name: Natural Person Identifier
+    data_type: varchar(60)
+    is_primary_key: true
+    is_nullable: false
+
+  - attribute_id: reporting_reference_date
+    name: Reporting Reference Date
+    data_type: date
+    is_primary_key: true
+    is_nullable: false
+
+  - attribute_id: country_of_residence
+    name: Country of Residence
+    data_type: char(2)
+    is_nullable: false
+    domain: iso_3166_country
+
+  - attribute_id: individual_income
+    name: Individual Income
+    data_type: decimal(12,2)
+    is_nullable: true
+    description: |
+      The gross annual income of the individual. Amount in euro.
+
+  - attribute_id: employment_status
+    name: Employment Status
+    data_type: varchar(255)
+    is_nullable: true
+    domain: employment_status
+    description: |
+      Current employment status of the individual.
+
+  - attribute_id: age_at_inception
+    name: Age at Inception
+    data_type: integer
+    is_nullable: true
+    description: |
+      Age of the borrower at the time of loan origination.

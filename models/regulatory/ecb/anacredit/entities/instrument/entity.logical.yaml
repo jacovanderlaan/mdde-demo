@@ -1,0 +1,157 @@
+entity:
+  entity_id: instrument
+  name: Instrument
+  description: |
+    An instrument is any item specified in the data attribute 'type of instrument',
+    as defined in AnaCredit Annex IV.
+
+    The level of granularity for the instrument data is the instrument. Each record
+    is uniquely identified by the combination of: reporting agent identifier,
+    observed agent identifier, contract identifier, and instrument identifier.
+  layer: integration
+  stereotype: reg_critical_data
+  bcbs239_domain: aggregation
+
+attributes:
+  - attribute_id: reporting_agent_identifier
+    name: Reporting Agent Identifier
+    data_type: varchar(60)
+    is_primary_key: true
+    is_nullable: false
+
+  - attribute_id: observed_agent_identifier
+    name: Observed Agent Identifier
+    data_type: varchar(60)
+    is_primary_key: true
+    is_nullable: false
+
+  - attribute_id: contract_identifier
+    name: Contract Identifier
+    data_type: varchar(60)
+    is_primary_key: true
+    is_nullable: false
+
+  - attribute_id: instrument_identifier
+    name: Instrument Identifier
+    data_type: varchar(60)
+    is_primary_key: true
+    is_nullable: false
+    description: |
+      An identifier applied by the reporting agent to uniquely identify each
+      instrument under a single contract. Each instrument identifier must be
+      unique for each contract.
+
+  - attribute_id: reporting_reference_date
+    name: Reporting Reference Date
+    data_type: date
+    is_primary_key: true
+    is_nullable: false
+
+  - attribute_id: type_of_instrument
+    name: Type of Instrument
+    data_type: varchar(255)
+    is_nullable: false
+    domain: type_of_instrument
+    description: |
+      Classification of the instrument according to the type of contractual
+      terms agreed between the parties.
+
+  - attribute_id: inception_date
+    name: Inception Date of Instrument
+    data_type: date
+    is_nullable: false
+    description: |
+      The date on which the instrument relationship originated.
+
+  - attribute_id: currency_denomination
+    name: Currency Denomination
+    data_type: char(3)
+    is_nullable: false
+    domain: iso_4217_currency
+    description: |
+      Currency denomination of instrument, in accordance with ISO 4217 standard.
+
+  - attribute_id: commitment_amount_at_inception
+    name: Commitment Amount at Inception
+    data_type: decimal(16,2)
+    is_nullable: false
+    description: |
+      Observed agent's maximum exposure to credit risk on the inception date
+      of the instrument, without taking into account any protection held.
+      Amount in euro.
+
+  - attribute_id: type_of_amortisation
+    name: Type of Amortisation
+    data_type: varchar(255)
+    is_nullable: false
+    domain: amortisation_type
+    description: |
+      Type of amortisation of the instrument including principal and interest.
+
+  - attribute_id: legal_final_maturity_date
+    name: Legal Final Maturity Date
+    data_type: date
+    is_nullable: false
+    description: |
+      The contractual maturity date of the instrument, taking into account
+      any agreements amending initial contracts.
+
+  - attribute_id: interest_rate_type
+    name: Interest Rate Type
+    data_type: varchar(255)
+    is_nullable: false
+    domain: interest_rate_type
+    description: |
+      Classification based on the base rate for establishing the interest
+      rate for each payment period.
+
+  - attribute_id: interest_rate_reset_frequency
+    name: Interest Rate Reset Frequency
+    data_type: varchar(255)
+    is_nullable: false
+    domain: interest_rate_reset_frequency
+    description: |
+      Frequency at which the interest rate is reset after the initial
+      fixed-rate period.
+
+  - attribute_id: payment_frequency
+    name: Payment Frequency
+    data_type: varchar(255)
+    is_nullable: false
+    domain: payment_frequency
+    description: |
+      Frequency of payments due, either of principal or interest.
+
+  - attribute_id: fiduciary_instrument
+    name: Fiduciary Instrument
+    data_type: varchar(255)
+    is_nullable: false
+    domain: fiduciary_indicator
+    description: |
+      Identification of instruments in which the observed agent acts in its
+      own name but on behalf of and with the risk borne by a third party.
+
+  - attribute_id: purpose
+    name: Purpose
+    data_type: varchar(255)
+    is_nullable: false
+    domain: instrument_purpose
+    description: |
+      Classification of instruments according to their purpose.
+
+  - attribute_id: recourse
+    name: Recourse
+    data_type: varchar(255)
+    is_nullable: false
+    domain: recourse_indicator
+    description: |
+      Classification based on the creditor's rights to seize assets other
+      than any protection pledged to secure the instrument.
+
+  - attribute_id: subordinated_debt
+    name: Subordinated Debt
+    data_type: varchar(255)
+    is_nullable: false
+    domain: subordinated_debt_indicator
+    description: |
+      Identification of subordinated debt instruments.

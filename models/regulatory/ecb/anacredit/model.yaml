@@ -1,0 +1,25 @@
+model:
+  model_id: anacredit
+  name: AnaCredit CDM
+  description: |
+    ECB AnaCredit (Analytical Credit Datasets) regulation model.
+
+    AnaCredit is a dataset containing detailed information on individual bank loans
+    in the euro area, collected by the ECB under Regulation (EU) 2016/867.
+
+    This model represents the conceptual data model based on:
+    - ECB Regulation (EU) 2016/867
+    - AnaCredit Reporting Manual Part II
+    - Data Delivery Agreement specifications
+
+    Key entity groups:
+    - Counterparty data (debtors, creditors, protection providers)
+    - Contract and instrument data
+    - Protection received data
+    - Financial and accounting data
+
+  regulatory_framework: AnaCredit
+  jurisdiction: EU
+  regulator: ECB
+  version: "3.0"
+  source: https://www.ecb.europa.eu/stats/money_credit_banking/anacredit/html/index.en.html

@@ -1,0 +1,61 @@
+entity:
+  entity_id: contract
+  name: Contract
+  description: |
+    A legally binding agreement between two or more parties under which one
+    or multiple instruments are created.
+
+    The contract level captures information about the overall agreement,
+    while individual instruments under the contract are reported separately.
+  layer: integration
+  stereotype: reg_critical_data
+  bcbs239_domain: governance
+
+attributes:
+  - attribute_id: reporting_agent_identifier
+    name: Reporting Agent Identifier
+    data_type: varchar(60)
+    is_primary_key: true
+    is_nullable: false
+
+  - attribute_id: observed_agent_identifier
+    name: Observed Agent Identifier
+    data_type: varchar(60)
+    is_primary_key: true
+    is_nullable: false
+    description: |
+      A number assigned by De Nederlandsche Bank that uniquely identifies
+      the observed agent.
+
+  - attribute_id: contract_identifier
+    name: Contract Identifier
+    data_type: varchar(60)
+    is_primary_key: true
+    is_nullable: false
+    description: |
+      An identifier applied by the reporting agent to uniquely identify each
+      contract. Each contract must have one contract identifier. This value
+      will not change over time and cannot be used as the contract identifier
+      for any other contract.
+
+  - attribute_id: reporting_reference_date
+    name: Reporting Reference Date
+    data_type: date
+    is_primary_key: true
+    is_nullable: false
+
+  - attribute_id: inception_date
+    name: Inception Date
+    data_type: date
+    is_nullable: false
+    description: |
+      The date on which the current contractual relationship originated,
+      i.e. the date on which the contract agreement became binding for all parties.
+
+  - attribute_id: syndicated_contract_indicator
+    name: Syndicated Contract Indicator
+    data_type: varchar(50)
+    is_nullable: false
+    domain: syndicated_contract_indicator
+    description: |
+      Distinguishes contracts into syndicated and non-syndicated contracts.

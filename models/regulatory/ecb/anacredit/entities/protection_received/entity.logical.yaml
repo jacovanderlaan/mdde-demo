@@ -1,0 +1,89 @@
+entity:
+  entity_id: protection_received
+  name: Protection Received
+  description: |
+    Protection received refers to protection against credit risk obtained by the
+    creditor to mitigate credit risk, either directly from the debtor or from a
+    third party.
+
+    Protection includes all types of protection, including physical collateral,
+    guarantees, and credit derivatives.
+  layer: integration
+  stereotype: reg_critical_data
+  bcbs239_domain: aggregation
+
+attributes:
+  - attribute_id: reporting_agent_identifier
+    name: Reporting Agent Identifier
+    data_type: varchar(60)
+    is_primary_key: true
+    is_nullable: false
+
+  - attribute_id: protection_identifier
+    name: Protection Identifier
+    data_type: varchar(60)
+    is_primary_key: true
+    is_nullable: false
+    description: |
+      An identifier applied by the reporting agent to uniquely identify each
+      protection item used to secure the instrument.
+
+  - attribute_id: reporting_reference_date
+    name: Reporting Reference Date
+    data_type: date
+    is_primary_key: true
+    is_nullable: false
+
+  - attribute_id: type_of_protection
+    name: Type of Protection
+    data_type: varchar(255)
+    is_nullable: false
+    domain: protection_type
+    description: |
+      Classification of the protection received according to the nature
+      of the protection.
+
+  - attribute_id: protection_value
+    name: Protection Value
+    data_type: decimal(16,2)
+    is_nullable: false
+    description: |
+      The value of the protection as determined by the protection valuation
+      approach. Amount in euro.
+
+  - attribute_id: protection_valuation_approach
+    name: Protection Valuation Approach
+    data_type: varchar(255)
+    is_nullable: false
+    domain: protection_valuation_approach
+    description: |
+      The type of valuation used for determining the protection value.
+
+  - attribute_id: date_of_protection_value
+    name: Date of Protection Value
+    data_type: date
+    is_nullable: false
+    description: |
+      The date on which the most recent protection valuation was made.
+
+  - attribute_id: real_estate_collateral_location
+    name: Real Estate Collateral Location
+    data_type: char(2)
+    is_nullable: true
+    domain: iso_3166_country
+    description: |
+      Country where the real estate collateral is located (ISO 3166-1 alpha-2).
+
+  - attribute_id: maturity_date_of_protection
+    name: Maturity Date of Protection
+    data_type: date
+    is_nullable: true
+    description: |
+      The contractual maturity date of the protection.
+
+  - attribute_id: original_protection_value
+    name: Original Protection Value
+    data_type: decimal(16,2)
+    is_nullable: true
+    description: |
+      The value of the protection at inception. Amount in euro.

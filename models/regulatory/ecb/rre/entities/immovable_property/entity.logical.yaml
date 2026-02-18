@@ -1,0 +1,88 @@
+entity:
+  entity_id: immovable_property
+  name: Immovable Property
+  description: |
+    Immovable property is protection received that has a fixed location.
+
+    In the RRE context, this represents residential real estate used as
+    collateral for mortgage loans, including information about property
+    type, location, and valuation.
+  layer: integration
+  stereotype: reg_critical_data
+  bcbs239_domain: aggregation
+
+attributes:
+  - attribute_id: reporting_agent_identifier
+    name: Reporting Agent Identifier
+    data_type: varchar(60)
+    is_primary_key: true
+    is_nullable: false
+
+  - attribute_id: protection_identifier
+    name: Protection Identifier
+    data_type: varchar(60)
+    is_primary_key: true
+    is_nullable: false
+    description: |
+      An identifier to uniquely identify each protection used to secure
+      the instrument.
+
+  - attribute_id: reporting_reference_date
+    name: Reporting Reference Date
+    data_type: date
+    is_primary_key: true
+    is_nullable: false
+
+  - attribute_id: immovable_property_type
+    name: Immovable Property Type
+    data_type: varchar(255)
+    is_nullable: false
+    domain: immovable_property_type
+    description: |
+      Classification of the immovable property into a specific type.
+
+  - attribute_id: protection_valuation_type
+    name: Protection Valuation Type
+    data_type: varchar(255)
+    is_nullable: false
+    domain: protection_valuation_type
+    description: |
+      The method used for valuing the protection.
+
+  - attribute_id: country
+    name: Property Country
+    data_type: char(2)
+    is_nullable: false
+    domain: iso_3166_country
+    description: |
+      ISO 3166-1 alpha-2 code of the country where the property is located.
+
+  - attribute_id: postal_code
+    name: Postal Code
+    data_type: varchar(20)
+    is_nullable: true
+    description: |
+      Postal code of the property location (for domestic properties).
+
+  - attribute_id: property_value
+    name: Property Value
+    data_type: decimal(14,2)
+    is_nullable: false
+    description: |
+      The value of the property as determined by the valuation approach.
+      Amount in euro.
+
+  - attribute_id: property_value_at_inception
+    name: Property Value at Inception
+    data_type: decimal(14,2)
+    is_nullable: true
+    description: |
+      The value of the property at the time of loan origination.
+      Amount in euro.
+
+  - attribute_id: date_of_valuation
+    name: Date of Valuation
+    data_type: date
+    is_nullable: false
+    description: |
+      The date on which the most recent property valuation was made.

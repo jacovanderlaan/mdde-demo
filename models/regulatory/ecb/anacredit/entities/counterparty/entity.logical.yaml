@@ -1,0 +1,91 @@
+entity:
+  entity_id: counterparty
+  name: Counterparty
+  description: |
+    An institutional unit that is a party to an instrument or has an affiliation
+    with a party to an instrument.
+
+    Institutional unit has the same meaning as defined in paragraphs 2.12 and 2.13
+    of Annex A to Regulation (EU) No 549/2013. An institutional unit is an economic
+    entity characterised by decision-making autonomy in the exercise of its principal
+    function.
+
+    The term institutional unit is a central concept of AnaCredit as pursuant to
+    Article 1(10) of the AnaCredit Regulation - all counterparties required to be
+    reported to AnaCredit are defined to be institutional units.
+  layer: integration
+  stereotype: reg_critical_data
+  bcbs239_domain: governance
+
+attributes:
+  - attribute_id: reporting_agent_identifier
+    name: Reporting Agent Identifier
+    data_type: varchar(60)
+    is_primary_key: true
+    is_nullable: false
+    description: |
+      A number assigned by De Nederlandsche Bank that uniquely identifies
+      the reporting agent.
+
+  - attribute_id: counterparty_identifier
+    name: Counterparty Identifier
+    data_type: varchar(60)
+    is_primary_key: true
+    is_nullable: false
+    description: |
+      An identifier applied by the reporting agent to uniquely identify each
+      counterparty. Each counterparty must have one counterparty identifier.
+      This value will not change over time and cannot be used as the counterparty
+      identifier for any other counterparty.
+
+  - attribute_id: reporting_reference_date
+    name: Reporting Reference Date
+    data_type: date
+    is_primary_key: true
+    is_nullable: false
+    description: |
+      The date that indicates the date the entity type delivery pertains to.
+      Defined as yyyy-mm-dd.
+
+  - attribute_id: lei
+    name: Legal Entity Identifier
+    data_type: varchar(20)
+    is_nullable: true
+    description: |
+      Legal Entity Identifier (LEI) - an alpha-numeric reference code in line
+      with the ISO 17442 standard assigned to a legal entity. The LEI code
+      enables unique global identification of entities.
+
+  - attribute_id: national_identifier
+    name: National Identifier
+    data_type: varchar(50)
+    is_nullable: true
+    description: |
+      A commonly used identification code which enables the unambiguous
+      identification of a counterparty within its country of residency.
+
+  - attribute_id: national_identifier_type
+    name: National Identifier Type
+    data_type: varchar(255)
+    is_nullable: true
+    description: |
+      Free format text describing how the national identifier is referred to.
+      Examples: "VAT", "Trade register number"
+
+  - attribute_id: protection_provider_indicator
+    name: Protection Provider Indicator
+    data_type: varchar(50)
+    is_nullable: false
+    domain: protection_provider_indicator
+    description: |
+      Indicates whether the institutional unit is being reported as granting
+      protection against a negative credit event, or not.
+
+  - attribute_id: legal_entity_indicator
+    name: Legal Entity Indicator
+    data_type: varchar(50)
+    is_nullable: false
+    domain: legal_entity_indicator
+    description: |
+      Distinguishes counterparties into those that are a legal entity in their
+      own right and those that are part of a legal entity.

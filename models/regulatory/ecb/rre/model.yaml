@@ -1,0 +1,22 @@
+model:
+  model_id: rre
+  name: RRE (Residential Real Estate) Data Model
+  description: |
+    ECB Residential Real Estate (RRE) regulation model for mortgage lending data.
+
+    This model extends AnaCredit with additional data requirements specific to
+    residential real estate lending, including:
+    - Property-level information (location, type, valuation)
+    - Borrower characteristics (income, employment status)
+    - Loan-to-value ratios
+    - Buy-to-let indicators
+
+    The RRE model supports monitoring of systemic risks in the residential
+    real estate market and complements the broader AnaCredit framework.
+
+  regulatory_framework: RRE/AnaCredit
+  jurisdiction: EU
+  regulator: ECB/DNB
+  version: "2.0"
+  parent_model_id: anacredit
+  source: https://www.dnb.nl/en/statistics/dashboards/residential-real-estate/

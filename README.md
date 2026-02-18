@@ -29,8 +29,10 @@ ls models/
 mdde-demo/
 ├── models/                    # Sample YAML models
 │   ├── ecommerce/            # E-commerce example (customers, orders, products)
-│   ├── data-vault/           # Data Vault pattern example
-│   └── dimensional/          # Dimensional model example
+│   └── regulatory/           # Public regulatory frameworks
+│       └── ecb/
+│           ├── anacredit/    # ECB AnaCredit credit data model
+│           └── rre/          # Residential Real Estate model
 ├── schemas/                   # JSON schemas for YAML validation
 ├── generated/                 # Example generated outputs
 │   ├── ddl/                  # DDL scripts per dialect
@@ -91,6 +93,28 @@ MDDE supports various architectural patterns through stereotypes:
 | **Dimensional** | `dim_fact`, `dim_dimension`, `dim_scd1`, `dim_scd2`, `dim_reference` |
 | **Staging** | `stg_raw`, `stg_cleaned`, `stg_persistent` |
 | **Delivery** | `del_api`, `del_report`, `del_view` |
+| **Regulatory** | `reg_critical_data`, `reg_risk_aggregation`, `reg_exposure`, `reg_risk_report` |
+
+## Regulatory Models
+
+MDDE includes models based on public regulatory frameworks:
+
+### ECB AnaCredit
+The AnaCredit (Analytical Credit Datasets) model captures detailed credit data as required by ECB Regulation (EU) 2016/867. Key entities include:
+- **Counterparty** - Institutional units (debtors, creditors, protection providers)
+- **Contract** - Credit agreements
+- **Instrument** - Individual loans and credit facilities
+- **Protection Received** - Collateral and guarantees
+- **Accounting/Financial Data** - IFRS-compliant reporting
+
+### ECB RRE (Residential Real Estate)
+The RRE model extends AnaCredit for residential mortgage lending:
+- **Immovable Property** - Real estate collateral with valuation
+- **Household** - Borrower household composition
+- **Natural Person** - Individual borrower characteristics
+- **LTV, Income, Buy-to-Let** - Risk-relevant attributes
+
+See [models/regulatory/](models/regulatory/) for the complete models.
 
 ## Three-Layer Architecture
 

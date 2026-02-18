@@ -1,0 +1,62 @@
+entity:
+  entity_id: counterparty
+  name: Counterparty
+  description: |
+    Counterparty means an institutional unit that is a party to an instrument
+    or has an affiliation with a party to an instrument.
+
+    In the RRE context, counterparties are typically households or natural persons
+    taking out mortgage loans for residential property.
+  layer: integration
+  stereotype: reg_critical_data
+  bcbs239_domain: governance
+
+attributes:
+  - attribute_id: reporting_agent_identifier
+    name: Reporting Agent Identifier
+    data_type: varchar(60)
+    is_primary_key: true
+    is_nullable: false
+    description: |
+      A number assigned by De Nederlandsche Bank that uniquely identifies
+      the reporting agent.
+
+  - attribute_id: counterparty_identifier
+    name: Counterparty Identifier
+    data_type: varchar(60)
+    is_primary_key: true
+    is_nullable: false
+    description: |
+      An identifier applied by the reporting agent to uniquely identify each
+      counterparty.
+
+  - attribute_id: reporting_reference_date
+    name: Reporting Reference Date
+    data_type: date
+    is_primary_key: true
+    is_nullable: false
+
+  - attribute_id: country
+    name: Country of Residence
+    data_type: char(2)
+    is_nullable: false
+    domain: iso_3166_country
+    description: |
+      ISO 3166-1 alpha-2 code of the country of residence of the counterparty.
+
+  - attribute_id: protection_provider_indicator
+    name: Protection Provider Indicator
+    data_type: varchar(50)
+    is_nullable: false
+    domain: protection_provider_indicator
+    description: |
+      Distinguishes counterparties that are protection providers from those
+      that are not.
+
+  - attribute_id: legal_entity_indicator
+    name: Legal Entity Indicator
+    data_type: varchar(50)
+    is_nullable: false
+    domain: legal_entity_indicator
+    description: |
+      Distinguishes counterparties into legal entities and households.
