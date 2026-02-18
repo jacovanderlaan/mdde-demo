@@ -1,0 +1,13 @@
+# MDDE Lite Dependencies
+
+# SQL parsing and transpilation
+sqlglot>=20.0.0
+
+# In-memory/file database for metadata
+duckdb>=0.9.0
+
+# YAML processing
+pyyaml>=6.0
+
+# Optional: For notebook demos
+jupyter>=1.0.0

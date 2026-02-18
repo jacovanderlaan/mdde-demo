@@ -1,239 +1,227 @@
-# MDDE - Metadata-Driven Data Engineering
+# MDDE Lite - Educational Edition
 
-A framework for modeling data platforms using YAML-based metadata that generates DDL, documentation, and lineage across multiple target platforms.
+A minimal implementation of **Metadata-Driven Data Engineering** concepts. This repository demonstrates core MDDE functionality with working code you can run.
 
 ## What is MDDE?
 
-MDDE (Metadata-Driven Data Engineering) is an approach where you define your data models once in YAML and generate:
-
-- **DDL scripts** for Snowflake, Databricks, BigQuery, SQL Server, etc.
-- **dbt models** with proper materializations and tests
-- **Documentation** with ERD diagrams and data dictionaries
-- **Lineage** at entity and column level
-- **Data Vault / Dimensional** patterns with stereotype-driven generation
+MDDE (Metadata-Driven Data Engineering) is an approach where you:
+1. **Parse** SQL files to extract metadata (entities, attributes, lineage)
+2. **Store** metadata in a structured schema
+3. **Analyze** SQL for quality issues and optimization opportunities
+4. **Generate** improved SQL, documentation, and diagrams
 
 ## Quick Start
 
 ```bash
-# Clone this demo repository
+# Clone and install
 git clone https://github.com/jacovanderlaan/mdde-demo.git
 cd mdde-demo
+pip install -r requirements.txt
 
-# Explore the sample models
-ls models/
+# Run the SQL parser
+python -m src.mdde_lite.parser examples/sales
+
+# Run the SQL optimizer
+python -m src.mdde_lite.optimizer examples/sales
+
+# Run the SQL regenerator
+python -m src.mdde_lite.generator
 ```
 
 ## Repository Structure
 
 ```
 mdde-demo/
-├── models/                    # Sample YAML models
-│   ├── ecommerce/            # E-commerce example (customers, orders, products)
-│   └── regulatory/           # Public regulatory frameworks
-│       └── ecb/
-│           ├── anacredit/    # ECB AnaCredit credit data model
-│           └── rre/          # Residential Real Estate model
-├── schemas/                   # JSON schemas for YAML validation
-├── generated/                 # Example generated outputs
-│   ├── ddl/                  # DDL scripts per dialect
-│   ├── dbt/                  # dbt model examples
-│   └── docs/                 # Generated documentation
-├── tools/                    # Standalone utilities
-│   └── cte-regression/       # SQL regression analysis tool
-└── articles/                 # Links to Medium articles
+├── src/mdde_lite/           # MDDE Lite Python package
+│   ├── schema.py            # Minimal metadata schema (5 tables)
+│   ├── parser.py            # SQL parser using sqlglot
+│   ├── optimizer.py         # SQL quality checks
+│   └── generator.py         # SQL regenerator
+├── examples/
+│   └── sales/               # Sample SQL files
+│       ├── customers.sql
+│       ├── orders.sql
+│       ├── order_summary.sql
+│       └── products_bad.sql  # Intentionally bad SQL for optimizer demo
+├── workspace/
+│   └── sales/               # Generated output
+│       ├── model.conceptual.yaml
+│       └── diagrams/
+├── models/                   # YAML model examples
+│   ├── ecommerce/           # E-commerce pattern
+│   └── regulatory/          # Public regulatory frameworks (AnaCredit, RRE)
+├── docs/
+│   └── adr/                 # Architecture Decision Records
+└── schemas/                 # JSON schemas for validation
 ```
 
-## Sample Model
+## MDDE Lite Components
 
-Here's what an MDDE entity looks like:
+### 1. Minimal Metadata Schema
+
+Five core tables that capture essential metadata:
+
+| Table | Purpose |
+|-------|---------|
+| `entity` | Tables, views, CTEs |
+| `attribute` | Columns within entities |
+| `relationship` | Links between entities |
+| `attribute_mapping` | Column-level lineage |
+| `optimizer_diagnostics` | SQL quality findings |
+
+```python
+from src.mdde_lite.schema import create_schema
+
+conn = create_schema("my_metadata.duckdb")
+```
+
+### 2. SQL Parser
+
+Parses SQL files using [sqlglot](https://github.com/tobymao/sqlglot) and stores metadata:
+
+```python
+from src.mdde_lite.parser import parse_directory
+
+results = parse_directory("examples/sales")
+# Extracts: entities, attributes, CTEs, source tables, lineage
+```
+
+### 3. SQL Optimizer
+
+Detects common SQL anti-patterns:
+
+| Check | Description |
+|-------|-------------|
+| `SELECT_STAR` | SELECT * usage |
+| `MISSING_ALIAS` | Tables without aliases in JOINs |
+| `ORDER_BY_NUMBER` | ORDER BY 1 instead of column name |
+| `IMPLICIT_JOIN` | Comma-separated FROM |
+| `WHERE_1_EQUALS_1` | WHERE 1=1 pattern |
+
+```python
+from src.mdde_lite.optimizer import analyze_directory
+
+results = analyze_directory("examples/sales")
+print(results["by_type"])  # {"SELECT_STAR": 1, "ORDER_BY_NUMBER": 1, ...}
+```
+
+### 4. SQL Regenerator
+
+Formats and transpiles SQL:
+
+```python
+from src.mdde_lite.generator import format_sql, transpile_sql
+
+# Format consistently
+formatted = format_sql("SELECT * FROM orders WHERE status='active'")
+
+# Transpile between dialects
+snowflake_sql = transpile_sql(sql, "duckdb", "snowflake")
+bigquery_sql = transpile_sql(sql, "duckdb", "bigquery")
+```
+
+## Example: Full Pipeline
+
+```python
+from src.mdde_lite.schema import create_schema
+from src.mdde_lite.parser import parse_directory
+from src.mdde_lite.optimizer import analyze_directory
+
+# 1. Create metadata database
+conn = create_schema("sales_metadata.duckdb")
+
+# 2. Parse SQL files
+parse_results = parse_directory("examples/sales", "sales_metadata.duckdb")
+print(f"Parsed {len(parse_results)} files")
+
+# 3. Analyze for issues
+optimize_results = analyze_directory("examples/sales", "sales_metadata.duckdb")
+print(f"Found {optimize_results['total_diagnostics']} issues")
+
+# 4. Query the metadata
+entities = conn.execute("SELECT * FROM entity").fetchall()
+diagnostics = conn.execute("SELECT * FROM optimizer_diagnostics").fetchall()
+```
+
+## Architecture Decision Records (ADRs)
+
+We document architectural decisions using ADRs. See [docs/adr/](docs/adr/) for:
+
+| ADR | Decision |
+|-----|----------|
+| [ADR-001](docs/adr/ADR-001-yaml-over-json.md) | YAML over JSON for model files |
+| [ADR-002](docs/adr/ADR-002-three-layer-modeling.md) | Three-layer modeling approach |
+| [ADR-003](docs/adr/ADR-003-stereotype-driven-generation.md) | Stereotype-driven code generation |
+
+ADRs help teams remember *why* decisions were made, not just *what* was decided.
+
+## Sample YAML Models
+
+### E-commerce Model
 
 ```yaml
 # models/ecommerce/entities/customer/entity.logical.yaml
-entity_id: customer
-name: Customer
-description: Customer master data
-stereotype: dim_scd2
-layer: business
+entity:
+  entity_id: customer
+  name: Customer
+  stereotype: dim_scd2
+  layer: business
 
 attributes:
   - attribute_id: customer_id
-    name: Customer ID
     data_type: integer
     is_primary_key: true
-
-  - attribute_id: customer_name
-    name: Customer Name
-    data_type: varchar(100)
-    is_nullable: false
-
   - attribute_id: email
-    name: Email Address
     data_type: varchar(255)
     pii_classification: email
-
-  - attribute_id: tier
-    name: Customer Tier
-    data_type: varchar(20)
-    domain: customer_tier  # References domain for valid values
-
-relationships:
-  - relationship_id: customer_orders
-    target_entity: order
-    cardinality: one_to_many
-    foreign_key: customer_id
 ```
 
-## Supported Stereotypes
+### Regulatory Models
 
-MDDE supports various architectural patterns through stereotypes:
+Public regulatory frameworks modeled in MDDE format:
 
-| Pattern | Stereotypes |
-|---------|-------------|
-| **Data Vault** | `dv_hub`, `dv_link`, `dv_satellite`, `dv_pit`, `dv_bridge` |
-| **Dimensional** | `dim_fact`, `dim_dimension`, `dim_scd1`, `dim_scd2`, `dim_reference` |
-| **Staging** | `stg_raw`, `stg_cleaned`, `stg_persistent` |
-| **Delivery** | `del_api`, `del_report`, `del_view` |
-| **Regulatory** | `reg_critical_data`, `reg_risk_aggregation`, `reg_exposure`, `reg_risk_report` |
+- **AnaCredit** - ECB credit data regulation (counterparty, instrument, protection)
+- **RRE** - Residential real estate mortgages (LTV, household income, property)
 
-## Regulatory Models
+See [models/regulatory/](models/regulatory/) for complete models.
 
-MDDE includes models based on public regulatory frameworks:
+## What This Demo Shows
 
-### ECB AnaCredit
-The AnaCredit (Analytical Credit Datasets) model captures detailed credit data as required by ECB Regulation (EU) 2016/867. Key entities include:
-- **Counterparty** - Institutional units (debtors, creditors, protection providers)
-- **Contract** - Credit agreements
-- **Instrument** - Individual loans and credit facilities
-- **Protection Received** - Collateral and guarantees
-- **Accounting/Financial Data** - IFRS-compliant reporting
+| Concept | Demo |
+|---------|------|
+| SQL parsing | `parser.py` extracts metadata from SQL |
+| Metadata storage | 5-table schema in DuckDB |
+| Quality checks | `optimizer.py` detects anti-patterns |
+| SQL generation | `generator.py` formats and transpiles |
+| YAML models | Sample entity definitions |
+| ADRs | Decision documentation |
 
-### ECB RRE (Residential Real Estate)
-The RRE model extends AnaCredit for residential mortgage lending:
-- **Immovable Property** - Real estate collateral with valuation
-- **Household** - Borrower household composition
-- **Natural Person** - Individual borrower characteristics
-- **LTV, Income, Buy-to-Let** - Risk-relevant attributes
+## What Remains Private
 
-See [models/regulatory/](models/regulatory/) for the complete models.
+The full MDDE framework includes features not in this demo:
 
-## Three-Layer Architecture
-
-MDDE uses a three-layer modeling approach:
-
-1. **Conceptual** - Business entities and relationships (no technical details)
-2. **Logical** - Attributes, data types, keys, domains
-3. **Technical** - Platform-specific settings (partitioning, clustering, etc.)
-
-## Generated Outputs
-
-From a single YAML model, MDDE can generate:
-
-### DDL (Multiple Dialects)
-```sql
--- Snowflake
-CREATE TABLE business.dim_customer (
-    customer_sk NUMBER AUTOINCREMENT,
-    customer_id NUMBER NOT NULL,
-    customer_name VARCHAR(100) NOT NULL,
-    email VARCHAR(255),
-    tier VARCHAR(20),
-    valid_from TIMESTAMP_NTZ NOT NULL,
-    valid_to TIMESTAMP_NTZ,
-    is_current BOOLEAN DEFAULT TRUE,
-    PRIMARY KEY (customer_sk)
-);
-
--- Databricks
-CREATE TABLE business.dim_customer (
-    customer_sk BIGINT GENERATED ALWAYS AS IDENTITY,
-    ...
-) USING DELTA
-TBLPROPERTIES ('delta.autoOptimize.optimizeWrite' = 'true');
-```
-
-### dbt Models
-```sql
--- models/business/dim_customer.sql
-{{ config(
-    materialized='incremental',
-    unique_key='customer_sk',
-    incremental_strategy='merge'
-) }}
-
-SELECT
-    {{ dbt_utils.generate_surrogate_key(['customer_id']) }} as customer_sk,
-    customer_id,
-    customer_name,
-    email,
-    tier,
-    ...
-```
-
-### ERD Diagrams
-```mermaid
-erDiagram
-    CUSTOMER ||--o{ ORDER : places
-    CUSTOMER {
-        int customer_id PK
-        string customer_name
-        string email
-        string tier
-    }
-    ORDER ||--|{ ORDER_ITEM : contains
-    ORDER {
-        int order_id PK
-        int customer_id FK
-        date order_date
-        string status
-    }
-```
-
-## Standalone Tools
-
-This repository includes standalone tools that work independently:
-
-### CTE Regression Analysis
-
-Compare SQL queries to detect regressions when refactoring:
-
-```python
-from cte_regression import quick_compare
-
-results = quick_compare(
-    QUERY_LEGACY,
-    QUERY_NEW,
-    key_columns={"final": ["customer_id"]}
-)
-```
-
-See [tools/cte-regression/](tools/cte-regression/) for details.
-
-## Articles
-
-Learn more about MDDE through these Medium articles:
-
-1. [Introduction to Metadata-Driven Data Engineering](https://medium.com/@jaco.vanderlaan)
-2. [Modeling Data Vault with MDDE](https://medium.com/@jaco.vanderlaan)
-3. [Generating Multi-Dialect DDL](https://medium.com/@jaco.vanderlaan)
-4. [Column-Level Lineage](https://medium.com/@jaco.vanderlaan)
+- Full optimizer pipeline with CTE normalization
+- Advanced UNION handling and dialect rendering
+- Complete 60+ table metadata schema
+- VS Code extension with visualization
+- GenAI-powered modeling assistance
+- BEAM integration and enterprise imports
+- Migration tooling
 
 ## Want the Full Framework?
 
-This demo repository shows the concepts and sample outputs. The full MDDE framework includes:
+This educational edition demonstrates the concepts. For the full MDDE framework:
 
-- Complete Python engine for parsing and generation
-- VS Code extension with IntelliSense and visualization
-- CLI tools for batch generation
-- GenAI-powered modeling assistance
-- Advanced features (FCO-IM, migrations, regulatory compliance)
+- **Workshops** - Hands-on training sessions
+- **Consulting** - Implementation in your organization
+- **Enterprise License** - Full framework access
 
-**For access to the full framework:**
-- Workshops and training sessions
-- Consulting engagements
-- Enterprise licensing
-
-Contact: [Your contact info]
+Contact: [jacovanderlaan on LinkedIn](https://linkedin.com/in/jacovanderlaan)
 
 ## License
 
-This demo repository is provided for educational purposes. See [LICENSE](LICENSE) for details.
+MIT License - See [LICENSE](LICENSE) for details.
+
+---
+
+**MDDE Lite** - Proving it's real, one SQL file at a time.
