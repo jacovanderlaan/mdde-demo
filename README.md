@@ -1,6 +1,14 @@
 # MDDE Lite - Educational Edition
 
-A minimal implementation of **Metadata-Driven Data Engineering** concepts. This repository demonstrates core MDDE functionality with working code you can run.
+> *"Is MDDE just a concept — or is it something we can actually try?"*
+>
+> **It's real. And this is a minimal demo you can run yourself.**
+
+A minimal implementation of **Metadata-Driven Data Engineering** concepts. This repository demonstrates core MDDE functionality with working code.
+
+Read the full story: [Is MDDE Just a Concept?](articles/is-mdde-just-a-concept.md)
+
+---
 
 ## What is MDDE?
 

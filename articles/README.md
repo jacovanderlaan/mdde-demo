@@ -2,6 +2,18 @@
 
 A comprehensive collection of **165+ articles** on Metadata-Driven Data Engineering by [Jaco van der Laan](https://medium.com/@jaco.vanderlaan).
 
+---
+
+## Featured Article
+
+### [Is MDDE Just a Concept?](is-mdde-just-a-concept.md)
+
+The article that introduces this demo repository. Answers the question: *Is MDDE real, or just a concept?*
+
+**Spoiler:** It's real. And you can run it.
+
+---
+
 ## Article Series
 
 ### Getting Started
