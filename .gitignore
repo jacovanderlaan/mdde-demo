@@ -24,3 +24,8 @@ Thumbs.db
 # Temp
 *.tmp
 *.log
+
+# Generated outputs (test artifacts)
+workspace/dbt/
+workspace/docs/
+generated/
