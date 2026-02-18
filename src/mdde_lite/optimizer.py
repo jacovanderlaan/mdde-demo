@@ -3,7 +3,9 @@ MDDE Lite - Simple SQL Optimizer
 
 SQL quality checks that detect common anti-patterns.
 
-Checks included (15 total):
+Checks included (20 total):
+
+Anti-Pattern Checks (15):
 - SELECT_STAR: SELECT * usage
 - MISSING_ALIAS: Tables without aliases in JOINs
 - ORDER_BY_NUMBER: ORDER BY column number instead of name
@@ -20,7 +22,17 @@ Checks included (15 total):
 - HARDCODED_DATE: Hardcoded date literals
 - MISSING_GROUP_BY: Aggregate function without GROUP BY
 
-Related article: "Implementing 25 Essential Data Quality Checks Using YAML Metadata"
+Determinism Checks (5):
+- WINDOW_NO_ORDER: ROW_NUMBER/RANK without ORDER BY
+- WINDOW_NON_UNIQUE_ORDER: ORDER BY may not be unique
+- LIMIT_NO_ORDER: LIMIT/TOP without ORDER BY
+- VOLATILE_FUNCTION: RANDOM(), NOW(), UUID() usage
+- FIRST_LAST_NO_ORDER: FIRST_VALUE/LAST_VALUE without ORDER BY
+
+Related articles:
+- "Implementing 25 Essential Data Quality Checks Using YAML Metadata"
+- "Testing Query Migrations Using Synthetic Data"
+- "Deterministic SQL Generation Is a Hard Invariant"
 
 This is a simplified version. The full MDDE optimizer includes:
 - CTE normalization and optimization
@@ -28,6 +40,8 @@ This is a simplified version. The full MDDE optimizer includes:
 - Advanced dialect rendering
 - Performance recommendations
 - Filter/join pushdown analysis
+- Automatic tie-breaker suggestions
+- DQ monitoring column generation
 """
 
 import sqlglot
@@ -414,13 +428,19 @@ def check_missing_group_by(parsed: exp.Expression) -> List[SQLDiagnostic]:
     return diagnostics
 
 
-def analyze_sql(sql_content: str) -> List[SQLDiagnostic]:
+def analyze_sql(sql_content: str, include_determinism: bool = True) -> List[SQLDiagnostic]:
     """
-    Run all 15 checks on SQL content.
+    Run all checks on SQL content.
+
+    Args:
+        sql_content: SQL to analyze
+        include_determinism: Whether to include determinism checks (default True)
 
     Returns list of diagnostics.
 
-    Related article: "Implementing 25 Essential Data Quality Checks Using YAML Metadata"
+    Related articles:
+    - "Implementing 25 Essential Data Quality Checks Using YAML Metadata"
+    - "Testing Query Migrations Using Synthetic Data"
     """
     try:
         parsed = sqlglot.parse_one(sql_content)
@@ -440,7 +460,7 @@ def analyze_sql(sql_content: str) -> List[SQLDiagnostic]:
     diagnostics.extend(check_implicit_join(parsed))
     diagnostics.extend(check_where_one_equals_one(parsed))
 
-    # New checks (expanding to 15)
+    # Anti-pattern checks (expanding to 15)
     diagnostics.extend(check_distinct_star(parsed))
     diagnostics.extend(check_cartesian_join(parsed))
     diagnostics.extend(check_duplicate_column(parsed))
@@ -451,6 +471,17 @@ def analyze_sql(sql_content: str) -> List[SQLDiagnostic]:
     diagnostics.extend(check_or_in_join(parsed))
     diagnostics.extend(check_hardcoded_date(parsed))
     diagnostics.extend(check_missing_group_by(parsed))
+
+    # Determinism checks (critical for regression testing)
+    if include_determinism:
+        from .determinism import check_determinism
+        for issue in check_determinism(sql_content):
+            diagnostics.append(SQLDiagnostic(
+                diagnostic_type=issue.issue_type,
+                message=issue.message,
+                severity=issue.severity,
+                suggestion=issue.suggestion,
+            ))
 
     return diagnostics
 
@@ -521,6 +552,7 @@ def analyze_directory(sql_dir: str, db_path: str = "mdde_lite.duckdb") -> Dict:
 def get_all_check_types() -> List[str]:
     """Return list of all check types for documentation."""
     return [
+        # Anti-pattern checks (15)
         "SELECT_STAR",
         "MISSING_ALIAS",
         "ORDER_BY_NUMBER",
@@ -536,6 +568,12 @@ def get_all_check_types() -> List[str]:
         "OR_IN_JOIN",
         "HARDCODED_DATE",
         "MISSING_GROUP_BY",
+        # Determinism checks (5)
+        "WINDOW_NO_ORDER",
+        "WINDOW_NON_UNIQUE_ORDER",
+        "LIMIT_NO_ORDER",
+        "VOLATILE_FUNCTION",
+        "FIRST_LAST_NO_ORDER",
     ]
 
 

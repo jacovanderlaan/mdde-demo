@@ -43,17 +43,20 @@ mdde-demo/
 ├── src/mdde_lite/           # MDDE Lite Python package
 │   ├── schema.py            # Minimal metadata schema (5 tables)
 │   ├── parser.py            # SQL parser using sqlglot
-│   ├── optimizer.py         # SQL quality checks (15 anti-patterns)
+│   ├── optimizer.py         # SQL quality checks (20 checks)
 │   ├── generator.py         # SQL regenerator
 │   ├── diagrams.py          # Mermaid diagram generation
-│   └── lineage.py           # Column-level lineage extraction
+│   ├── lineage.py           # Column-level lineage extraction
+│   └── determinism.py       # Non-deterministic SQL detection
 ├── examples/
 │   └── sales/               # Sample SQL files
 │       ├── customers.sql
 │       ├── orders.sql
 │       ├── order_summary.sql
 │       ├── products_bad.sql  # Intentionally bad SQL for optimizer demo
-│       └── analytics_bad.sql # More anti-patterns for testing
+│       ├── analytics_bad.sql # More anti-patterns for testing
+│       ├── dedup_bad.sql     # Non-deterministic patterns (ROW_NUMBER, etc.)
+│       └── dedup_good.sql    # Deterministic versions with tie-breakers
 ├── workspace/
 │   └── sales/               # Generated output
 │       ├── model.conceptual.yaml
@@ -97,7 +100,7 @@ results = parse_directory("examples/sales")
 # Extracts: entities, attributes, CTEs, source tables, lineage
 ```
 
-### 3. SQL Optimizer (15 Checks)
+### 3. SQL Optimizer (20 Checks)
 
 Detects common SQL anti-patterns:
 
@@ -119,11 +122,21 @@ Detects common SQL anti-patterns:
 | `HARDCODED_DATE` | info | Hardcoded date literals |
 | `MISSING_GROUP_BY` | error | Aggregate without GROUP BY |
 
+**Determinism Checks** (critical for regression testing):
+
+| Check | Severity | Description |
+|-------|----------|-------------|
+| `WINDOW_NO_ORDER` | error | ROW_NUMBER/RANK without ORDER BY |
+| `WINDOW_NON_UNIQUE_ORDER` | warning | ORDER BY may not be unique |
+| `FIRST_LAST_NO_ORDER` | error | FIRST_VALUE/LAST_VALUE without ORDER BY |
+| `LAG_LEAD_NO_ORDER` | error | LAG/LEAD without ORDER BY |
+| `LIMIT_NO_ORDER` | error | LIMIT/TOP without ORDER BY |
+
 ```python
 from src.mdde_lite.optimizer import analyze_directory, get_all_check_types
 
 results = analyze_directory("examples/sales")
-print(f"Checks available: {len(get_all_check_types())}")  # 15
+print(f"Checks available: {len(get_all_check_types())}")  # 20
 print(results["by_type"])  # {"SELECT_STAR": 1, "CARTESIAN_JOIN": 1, ...}
 ```
 
@@ -168,7 +181,52 @@ for lin in extract_lineage(sql):
 # orders.amount -> total_spent (aggregation)
 ```
 
-### 6. SQL Regenerator
+### 6. Determinism Checker (Critical for Migrations)
+
+Detects non-deterministic SQL patterns that cause issues during regression testing:
+
+```python
+from src.mdde_lite.determinism import check_determinism, suggest_tie_breakers
+
+sql = """
+SELECT
+    ROW_NUMBER() OVER (PARTITION BY region) AS rn,
+    customer_name
+FROM customers
+"""
+
+issues = check_determinism(sql)
+for issue in issues:
+    print(f"[{issue.severity}] {issue.issue_type}")
+    print(f"  {issue.message}")
+    print(f"  Suggestion: {issue.suggestion}")
+
+# Output:
+# [error] WINDOW_NO_ORDER
+#   ROW_NUMBER() without ORDER BY - results are non-deterministic
+#   Suggestion: Add ORDER BY clause with unique columns to ROW_NUMBER()
+```
+
+**Why This Matters:**
+
+During SQL migrations (Oracle → Snowflake, etc.), you need to compare results between systems. Non-deterministic SQL makes this impossible:
+- `ROW_NUMBER()` without unique ORDER BY assigns different numbers each run
+- `FIRST_VALUE()` without ORDER BY picks arbitrary "first" rows
+- `LIMIT` without ORDER BY returns random subsets
+
+**Solution:** Add "tie-breaker" columns to ensure unique ordering:
+
+```sql
+-- Non-deterministic
+ROW_NUMBER() OVER (PARTITION BY region ORDER BY created_at)
+
+-- Deterministic (customer_id breaks ties)
+ROW_NUMBER() OVER (PARTITION BY region ORDER BY created_at, customer_id)
+```
+
+See [ADR-004](docs/adr/ADR-004-deterministic-sql-patterns.md) and the [article on deterministic SQL](articles/the-hidden-danger-of-non-deterministic-sql.md) for details.
+
+### 7. SQL Regenerator
 
 Formats and transpiles SQL:
 
@@ -215,6 +273,7 @@ We document architectural decisions using ADRs. See [docs/adr/](docs/adr/) for:
 | [ADR-001](docs/adr/ADR-001-yaml-over-json.md) | YAML over JSON for model files |
 | [ADR-002](docs/adr/ADR-002-three-layer-modeling.md) | Three-layer modeling approach |
 | [ADR-003](docs/adr/ADR-003-stereotype-driven-generation.md) | Stereotype-driven code generation |
+| [ADR-004](docs/adr/ADR-004-deterministic-sql-patterns.md) | Deterministic SQL patterns for migrations |
 
 ADRs help teams remember *why* decisions were made, not just *what* was decided.
 
@@ -254,7 +313,8 @@ See [models/regulatory/](models/regulatory/) for complete models.
 |---------|------|------------------|
 | SQL parsing | `parser.py` extracts metadata | "Extracting Hidden Metadata Inside SQL" |
 | Metadata storage | 5-table schema in DuckDB | "From ERDs and Lineage to Executable Metadata" |
-| Quality checks | `optimizer.py` (15 checks) | "Implementing 25 Essential DQ Checks" |
+| Quality checks | `optimizer.py` (20 checks) | "Implementing 25 Essential DQ Checks" |
+| Determinism | `determinism.py` detects non-determinism | "The Hidden Danger of Non-Deterministic SQL" |
 | SQL generation | `generator.py` formats/transpiles | "From YAML to SQL" |
 | Diagram generation | `diagrams.py` Mermaid output | "Diagram Generation & Auto-Docs" |
 | Column lineage | `lineage.py` traces columns | "Beyond the SELECT Clause" |
