@@ -43,14 +43,17 @@ mdde-demo/
 ├── src/mdde_lite/           # MDDE Lite Python package
 │   ├── schema.py            # Minimal metadata schema (5 tables)
 │   ├── parser.py            # SQL parser using sqlglot
-│   ├── optimizer.py         # SQL quality checks
-│   └── generator.py         # SQL regenerator
+│   ├── optimizer.py         # SQL quality checks (15 anti-patterns)
+│   ├── generator.py         # SQL regenerator
+│   ├── diagrams.py          # Mermaid diagram generation
+│   └── lineage.py           # Column-level lineage extraction
 ├── examples/
 │   └── sales/               # Sample SQL files
 │       ├── customers.sql
 │       ├── orders.sql
 │       ├── order_summary.sql
-│       └── products_bad.sql  # Intentionally bad SQL for optimizer demo
+│       ├── products_bad.sql  # Intentionally bad SQL for optimizer demo
+│       └── analytics_bad.sql # More anti-patterns for testing
 ├── workspace/
 │   └── sales/               # Generated output
 │       ├── model.conceptual.yaml
@@ -94,26 +97,78 @@ results = parse_directory("examples/sales")
 # Extracts: entities, attributes, CTEs, source tables, lineage
 ```
 
-### 3. SQL Optimizer
+### 3. SQL Optimizer (15 Checks)
 
 Detects common SQL anti-patterns:
 
-| Check | Description |
-|-------|-------------|
-| `SELECT_STAR` | SELECT * usage |
-| `MISSING_ALIAS` | Tables without aliases in JOINs |
-| `ORDER_BY_NUMBER` | ORDER BY 1 instead of column name |
-| `IMPLICIT_JOIN` | Comma-separated FROM |
-| `WHERE_1_EQUALS_1` | WHERE 1=1 pattern |
+| Check | Severity | Description |
+|-------|----------|-------------|
+| `SELECT_STAR` | warning | SELECT * usage |
+| `MISSING_ALIAS` | info | Tables without aliases in JOINs |
+| `ORDER_BY_NUMBER` | warning | ORDER BY 1 instead of column name |
+| `IMPLICIT_JOIN` | warning | Comma-separated FROM |
+| `WHERE_1_EQUALS_1` | info | WHERE 1=1 pattern |
+| `DISTINCT_STAR` | warning | SELECT DISTINCT * pattern |
+| `CARTESIAN_JOIN` | warning | JOIN without ON clause |
+| `DUPLICATE_COLUMN` | warning | Same column selected twice |
+| `NESTED_SUBQUERY` | info | Deep subquery nesting (3+) |
+| `UNION_COLUMN_MISMATCH` | error | Mismatched columns in UNION |
+| `LEADING_WILDCARD` | info | LIKE '%...' (non-SARGable) |
+| `FUNCTION_IN_WHERE` | info | Function on column in WHERE |
+| `OR_IN_JOIN` | warning | OR condition in JOIN ON |
+| `HARDCODED_DATE` | info | Hardcoded date literals |
+| `MISSING_GROUP_BY` | error | Aggregate without GROUP BY |
 
 ```python
-from src.mdde_lite.optimizer import analyze_directory
+from src.mdde_lite.optimizer import analyze_directory, get_all_check_types
 
 results = analyze_directory("examples/sales")
-print(results["by_type"])  # {"SELECT_STAR": 1, "ORDER_BY_NUMBER": 1, ...}
+print(f"Checks available: {len(get_all_check_types())}")  # 15
+print(results["by_type"])  # {"SELECT_STAR": 1, "CARTESIAN_JOIN": 1, ...}
 ```
 
-### 4. SQL Regenerator
+### 4. Mermaid Diagram Generation
+
+Generate diagrams from metadata:
+
+```python
+from src.mdde_lite.diagrams import generate_erd, generate_dataflow, generate_lineage
+
+# Generate ERD from entities
+erd = generate_erd(conn)
+
+# Generate data flow diagram
+flow = generate_dataflow(conn)
+
+# Generate lineage for specific entity
+lineage_diagram = generate_lineage(conn, "ent_order_summary")
+```
+
+### 5. Column-Level Lineage
+
+Extract lineage from SQL SELECT statements:
+
+```python
+from src.mdde_lite.lineage import extract_lineage
+
+sql = """
+SELECT
+    c.customer_id,
+    c.name AS customer_name,
+    SUM(o.amount) AS total_spent
+FROM customers c
+JOIN orders o ON c.customer_id = o.customer_id
+GROUP BY c.customer_id, c.name
+"""
+
+for lin in extract_lineage(sql):
+    print(lin)
+# customers.customer_id -> customer_id (direct)
+# customers.name -> customer_name (rename)
+# orders.amount -> total_spent (aggregation)
+```
+
+### 6. SQL Regenerator
 
 Formats and transpiles SQL:
 
@@ -195,14 +250,16 @@ See [models/regulatory/](models/regulatory/) for complete models.
 
 ## What This Demo Shows
 
-| Concept | Demo |
-|---------|------|
-| SQL parsing | `parser.py` extracts metadata from SQL |
-| Metadata storage | 5-table schema in DuckDB |
-| Quality checks | `optimizer.py` detects anti-patterns |
-| SQL generation | `generator.py` formats and transpiles |
-| YAML models | Sample entity definitions |
-| ADRs | Decision documentation |
+| Concept | Demo | Related Articles |
+|---------|------|------------------|
+| SQL parsing | `parser.py` extracts metadata | "Extracting Hidden Metadata Inside SQL" |
+| Metadata storage | 5-table schema in DuckDB | "From ERDs and Lineage to Executable Metadata" |
+| Quality checks | `optimizer.py` (15 checks) | "Implementing 25 Essential DQ Checks" |
+| SQL generation | `generator.py` formats/transpiles | "From YAML to SQL" |
+| Diagram generation | `diagrams.py` Mermaid output | "Diagram Generation & Auto-Docs" |
+| Column lineage | `lineage.py` traces columns | "Beyond the SELECT Clause" |
+| YAML models | Entity definitions | "From ERDs to Executable Metadata" |
+| ADRs | Decision documentation | N/A |
 
 ## What Remains Private
 
