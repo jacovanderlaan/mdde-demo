@@ -6,7 +6,7 @@
 
 A minimal implementation of **Metadata-Driven Data Engineering** concepts. This repository demonstrates core MDDE functionality with working code.
 
-Read the full story: [Is MDDE Just a Concept?](articles/is-mdde-just-a-concept.md)
+Read the full story: [Is MDDE Just a Concept?](https://medium.com/@jacovanderlaan)
 
 ---
 
