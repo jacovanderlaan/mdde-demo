@@ -69,35 +69,42 @@ The cost is **lost alignment** — decisions made in planning that don't survive
 
 ---
 
-## A Different Approach: Models as Living Maps
+## A Different Approach: The Semantic Contract
 
-What if data models weren't static documents, but **semantic maps** that maintain continuity?
+What if data models weren't static documents, but **semantic contracts** that maintain continuity?
 
-This requires three types of interoperability:
+Microsoft's recent Fabric Ontology feature crystallizes this idea: a formal, machine-readable definition of your business entities that all tools — including AI — can consume. As Reena Pinto observes:
 
-1. **Semantic** — Shared meaning across domains
-2. **Structural** — Shared elements and relationships
-3. **Operational** — Shared capacity to act accordingly
+> "Most data quality problems are actually vocabulary problems in disguise. The data exists. It's often even accurate. The problem is that 'revenue' means something different in Finance, in Sales, and in the model your Marketing analyst built last quarter."
 
-A YAML-based, Git-native approach delivers all three:
+The bottleneck for AI isn't the model. **It's the vocabulary.**
+
+A semantic contract requires four capabilities:
+
+1. **Vocabulary Definition** — Formal business terms, not just column names
+2. **Binding Layer** — Connects vocabulary to physical implementation
+3. **Protection Layer** — Detects when bindings break
+4. **AI Vocabulary** — Machine-readable definitions for NLQ/Copilot
+
+A YAML-based, Git-native approach delivers all four:
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
-│                    Continuity Through Git                       │
+│                    The Semantic Contract                        │
 ├─────────────────────────────────────────────────────────────────┤
 │                                                                 │
-│  Conceptual    Logical       Physical       Runtime             │
-│  (YAML)        (YAML)        (Generated)    (Applied)           │
-│     │             │             │              │                │
-│     └─────────────┴─────────────┴──────────────┘                │
-│                         │                                       │
-│              Single source of truth                             │
-│         Full history │ Traceability │ Automation               │
+│  Vocabulary      Binding           Physical        AI/NLQ       │
+│  (YAML)          (Generation)      (Applied)       (Consumed)   │
+│     │                │                │               │         │
+│     └────────────────┴────────────────┴───────────────┘         │
+│                              │                                  │
+│                 Single source of truth                          │
+│      Formal definitions │ Traceability │ AI-ready vocabulary   │
 │                                                                 │
 └─────────────────────────────────────────────────────────────────┘
 ```
 
-The model becomes a **living map** — not a document to be exported, but a source that generates everything downstream.
+The model becomes a **semantic contract** — not a document to be exported, but a formal agreement about what your data means that all systems consume.
 
 ---
 
@@ -487,17 +494,46 @@ erwin-replacement/
 
 ---
 
+## The AI Vocabulary Problem
+
+Here's where the semantic contract becomes critical for the future.
+
+When you ask a Fabric Copilot "What's our customer lifetime value this quarter?", it needs to know: which customers? which definition of lifetime? which time boundary defines "this quarter"? Without a formal semantic layer, it guesses.
+
+**The failure mode is silent — a confident answer that's confidently wrong.**
+
+With a semantic contract, the AI has unambiguous context:
+
+```yaml
+glossary:
+  - term: customer_lifetime_value
+    definition: |
+      Total revenue attributed to a customer across their entire
+      relationship, calculated as SUM(order_amount) from fact_orders
+      where customer status != 'churned'.
+    synonyms: [CLV, LTV, lifetime value]
+    entity: dim_customer
+    owner: finance-team
+```
+
+The model doesn't just define structure. It defines **vocabulary** — the business language that AI tools need to give trustworthy answers.
+
+This is the direction Microsoft is going with Fabric Ontology. It's the direction every AI-assisted analytics platform will need to go. And it's exactly what a YAML-based semantic contract provides.
+
+---
+
 ## Beyond Tool Replacement
 
 The point isn't to replicate erwin feature-for-feature.
 
-The point is to solve the **continuity problem** that traditional tools ignore:
+The point is to solve the **continuity problem** that traditional tools ignore — and to prepare for an AI-assisted future where **vocabulary is the bottleneck**:
 
 - **Semantic continuity** — Shared meaning through domains, glossaries, and governance tags
 - **Structural continuity** — Generated outputs always match the source model
 - **Operational continuity** — Impact analysis before changes, not surprises after
 - **Temporal continuity** — Full Git history of every decision
 - **Social continuity** — Parallel collaboration without conflicts
+- **AI readiness** — Machine-readable definitions for the tools that are coming
 
 As Figay observes, enterprises are social systems. The tools we use should support that reality, not fight it.
 
@@ -511,14 +547,15 @@ More importantly, it doesn't require accepting discontinuity as inevitable.
 
 With YAML models, JSON Schema validation, Git workflows, and generation pipelines, you get:
 
-- A **semantic map** that evolves with your enterprise
+- A **semantic contract** that evolves with your enterprise
 - **Traceability** from business concept to physical schema
 - **Alignment** that survives execution, not just planning
 - **Collaboration** that scales with your team
+- **AI-ready vocabulary** for the tools that are coming
 
 The erwin era is ending.
 
-The era of **living data models** is beginning.
+The era of **semantic contracts** is beginning.
 
 ---
 
@@ -526,8 +563,10 @@ The era of **living data models** is beginning.
 
 **Read more**: [MDDE article series on Medium](https://medium.com/@jaco.vanderlaan)
 
-**Inspiration**: Nicolas Figay's work on [Semantic Cartography](https://medium.com/@nfigay)
+**Inspiration**:
+- Nicolas Figay's work on [Semantic Cartography](https://medium.com/@nfigay)
+- Reena Pinto on [Ontology in Microsoft Fabric](https://medium.com/@reenapinto)
 
 ---
 
-*This article is part of my ongoing series on Metadata-Driven Data Engineering. The ideas here build on Figay's insight that enterprise continuity requires more than good individual tools — it requires a paradigm that maintains alignment across domains and time.*
+*This article is part of my ongoing series on Metadata-Driven Data Engineering. The ideas here build on Figay's insight about enterprise continuity and Microsoft's recognition that AI needs formal vocabulary — not just data — to be useful.*
