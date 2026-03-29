@@ -69,42 +69,51 @@ The cost is **lost alignment** — decisions made in planning that don't survive
 
 ---
 
-## A Different Approach: The Semantic Contract
+## A Different Approach: The Semantic API
 
-What if data models weren't static documents, but **semantic contracts** that maintain continuity?
+What if data models weren't static documents, but **semantic APIs** that machines can consume?
 
-Microsoft's recent Fabric Ontology feature crystallizes this idea: a formal, machine-readable definition of your business entities that all tools — including AI — can consume. As Reena Pinto observes:
+Sergey Gromov makes a sharp observation about the modern data stack:
 
-> "Most data quality problems are actually vocabulary problems in disguise. The data exists. It's often even accurate. The problem is that 'revenue' means something different in Finance, in Sales, and in the model your Marketing analyst built last quarter."
+> "Business does not work with data — it works with meaning. Data are recorded events; meaning is an agreement about how to interpret them."
 
-The bottleneck for AI isn't the model. **It's the vocabulary.**
+The semantic layer never died. It moved into people's heads. dbt and marts guarantee consistent *computation*, but they don't guarantee consistent *understanding*. A human analyst bridges this gap automatically. An AI agent cannot.
 
-A semantic contract requires four capabilities:
+Microsoft's Fabric Ontology and Pinto's framing crystallize what's needed:
 
-1. **Vocabulary Definition** — Formal business terms, not just column names
-2. **Binding Layer** — Connects vocabulary to physical implementation
-3. **Protection Layer** — Detects when bindings break
-4. **AI Vocabulary** — Machine-readable definitions for NLQ/Copilot
+> "Most data quality problems are actually vocabulary problems in disguise."
 
-A YAML-based, Git-native approach delivers all four:
+The bottleneck for AI isn't the model. **It's the vocabulary.** And vocabulary isn't just descriptions — it's *rules*.
+
+### The Critical Distinction
+
+| What dbt Provides | What It Doesn't |
+|-------------------|-----------------|
+| How the number is computed | When the number makes sense |
+| Is the calculation correct? | Is the conclusion correct? |
+| Consistent SQL | Consistent interpretation |
+
+Documentation gives probabilistic hints. A semantic API gives **mandatory rules**.
+
+A YAML-based, Git-native approach delivers this:
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
-│                    The Semantic Contract                        │
+│                    The Semantic API                             │
 ├─────────────────────────────────────────────────────────────────┤
 │                                                                 │
-│  Vocabulary      Binding           Physical        AI/NLQ       │
-│  (YAML)          (Generation)      (Applied)       (Consumed)   │
+│  Vocabulary      Rules             Binding         AI/Agent     │
+│  (Terms)         (Interpretation)  (Physical)      (Consumes)   │
 │     │                │                │               │         │
 │     └────────────────┴────────────────┴───────────────┘         │
 │                              │                                  │
 │                 Single source of truth                          │
-│      Formal definitions │ Traceability │ AI-ready vocabulary   │
+│      Definitions │ Constraints │ Allowed Actions               │
 │                                                                 │
 └─────────────────────────────────────────────────────────────────┘
 ```
 
-The model becomes a **semantic contract** — not a document to be exported, but a formal agreement about what your data means that all systems consume.
+The model becomes a **semantic API** — not a document to be exported, but a formal interface that defines what your data means and how it can be used.
 
 ---
 
@@ -496,27 +505,44 @@ erwin-replacement/
 
 ## The AI Vocabulary Problem
 
-Here's where the semantic contract becomes critical for the future.
+Here's where the semantic API becomes critical for the future.
 
 When you ask a Fabric Copilot "What's our customer lifetime value this quarter?", it needs to know: which customers? which definition of lifetime? which time boundary defines "this quarter"? Without a formal semantic layer, it guesses.
 
 **The failure mode is silent — a confident answer that's confidently wrong.**
 
-With a semantic contract, the AI has unambiguous context:
+But here's the key insight from Gromov: documentation alone doesn't solve this. A description is a probabilistic hint. An AI can interpret "usually compare month-over-month" as "probably fine to compare day-over-day" if the context seems similar enough.
+
+What you need is not a description, but a **rule**:
 
 ```yaml
-glossary:
-  - term: customer_lifetime_value
-    definition: |
-      Total revenue attributed to a customer across their entire
-      relationship, calculated as SUM(order_amount) from fact_orders
-      where customer status != 'churned'.
-    synonyms: [CLV, LTV, lifetime value]
-    entity: dim_customer
-    owner: finance-team
+metric:
+  name: customer_lifetime_value
+  definition: |
+    Total revenue attributed to a customer across their entire
+    relationship.
+  synonyms: [CLV, LTV, lifetime value]
+  entity: dim_customer
+  owner: finance-team
+
+  # Rules (machine-enforceable, not just documentation)
+  rules:
+    computation:
+      must_use: payment_date           # Not order_date
+      must_exclude: [status = 'churned', status = 'refunded']
+
+    comparison:
+      allowed: [cohort, segment]
+      forbidden: [day_over_day]        # Too volatile
+
+    usage:
+      valid_for: [reporting, planning]
+      invalid_for: [real_time_action]  # Requires human review
 ```
 
-The model doesn't just define structure. It defines **vocabulary** — the business language that AI tools need to give trustworthy answers.
+The model doesn't just define structure. It defines **interpretation rules** — what the metric means, when it applies, and what you're allowed to do with it.
+
+A description can be read multiple ways. A rule can only be executed one way. That's the difference between a semantic layer and a semantic API.
 
 This is the direction Microsoft is going with Fabric Ontology. It's the direction every AI-assisted analytics platform will need to go. And it's exactly what a YAML-based semantic contract provides.
 
@@ -526,16 +552,17 @@ This is the direction Microsoft is going with Fabric Ontology. It's the directio
 
 The point isn't to replicate erwin feature-for-feature.
 
-The point is to solve the **continuity problem** that traditional tools ignore — and to prepare for an AI-assisted future where **vocabulary is the bottleneck**:
+The point is to solve the **continuity problem** that traditional tools ignore — and to build the **semantic API** that AI agents need:
 
 - **Semantic continuity** — Shared meaning through domains, glossaries, and governance tags
 - **Structural continuity** — Generated outputs always match the source model
 - **Operational continuity** — Impact analysis before changes, not surprises after
 - **Temporal continuity** — Full Git history of every decision
 - **Social continuity** — Parallel collaboration without conflicts
-- **AI readiness** — Machine-readable definitions for the tools that are coming
+- **Interpretation rules** — Not just descriptions, but enforceable constraints
+- **AI readiness** — Machine-readable definitions that agents can consume
 
-As Figay observes, enterprises are social systems. The tools we use should support that reality, not fight it.
+As Figay observes, enterprises are social systems. As Gromov observes, AI agents need rules, not hints. The tools we use should support both realities.
 
 ---
 
@@ -543,19 +570,21 @@ As Figay observes, enterprises are social systems. The tools we use should suppo
 
 Enterprise data modeling doesn't require enterprise pricing.
 
-More importantly, it doesn't require accepting discontinuity as inevitable.
+More importantly, it doesn't require accepting discontinuity as inevitable — or leaving AI agents to guess what your metrics mean.
 
 With YAML models, JSON Schema validation, Git workflows, and generation pipelines, you get:
 
-- A **semantic contract** that evolves with your enterprise
+- A **semantic API** that evolves with your enterprise
 - **Traceability** from business concept to physical schema
 - **Alignment** that survives execution, not just planning
 - **Collaboration** that scales with your team
-- **AI-ready vocabulary** for the tools that are coming
+- **Interpretation rules** that AI agents can follow
+
+The warehouse stores observations. The semantic API stores interpretations. That's the layer that's been missing.
 
 The erwin era is ending.
 
-The era of **semantic contracts** is beginning.
+The era of **semantic APIs** is beginning.
 
 ---
 
@@ -564,9 +593,10 @@ The era of **semantic contracts** is beginning.
 **Read more**: [MDDE article series on Medium](https://medium.com/@jaco.vanderlaan)
 
 **Inspiration**:
-- Nicolas Figay's work on [Semantic Cartography](https://medium.com/@nfigay)
+- Nicolas Figay on [Semantic Cartography](https://medium.com/@nfigay)
 - Reena Pinto on [Ontology in Microsoft Fabric](https://medium.com/@reenapinto)
+- Sergey Gromov on [The Semantic Layer as API](https://medium.com/@sergeygromov)
 
 ---
 
-*This article is part of my ongoing series on Metadata-Driven Data Engineering. The ideas here build on Figay's insight about enterprise continuity and Microsoft's recognition that AI needs formal vocabulary — not just data — to be useful.*
+*This article is part of my ongoing series on Metadata-Driven Data Engineering. The ideas here build on three converging insights: Figay's work on enterprise continuity, Microsoft's recognition that AI needs formal vocabulary, and Gromov's argument that the semantic layer must become an API — not a description layer, but a constraint layer that machines can execute.*
