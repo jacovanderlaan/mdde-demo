@@ -1,0 +1,129 @@
+# Account Dimension (SCD Type 2)
+# Banking accounts with full history
+
+entity:
+  name: dim_account
+  stereotype: dim_scd2
+  layer: gold
+  description: |
+    Account dimension tracking all banking accounts.
+    Each customer can have multiple accounts.
+    Tracks changes to status, limits, and rates over time.
+  owner: account-domain-team
+  tags: [financial, pci-relevant]
+
+  columns:
+    # Keys
+    - name: account_sk
+      data_type: bigint
+      primary_key: true
+      description: Surrogate key
+
+    - name: account_id
+      data_type: string
+      business_key: true
+      not_null: true
+      description: Account number (masked in non-prod)
+
+    - name: customer_sk
+      data_type: bigint
+      foreign_key: dim_customer.customer_sk
+      not_null: true
+      description: Link to owning customer
+
+    # Account details
+    - name: account_name
+      data_type: string
+      description: User-defined account nickname
+
+    - name: iban
+      data_type: $domain.iban
+      pii: true
+      description: International Bank Account Number
+
+    - name: product_code
+      data_type: string
+      not_null: true
+      description: Product identifier
+
+    - name: product_category
+      data_type: $domain.product_category
+      not_null: true
+      description: Product category
+
+    - name: currency_code
+      data_type: $domain.currency_code
+      not_null: true
+      default: "'EUR'"
+      description: Account currency
+
+    # Status
+    - name: status
+      data_type: $domain.account_status
+      not_null: true
+      description: Account status
+
+    - name: opened_date
+      data_type: date
+      not_null: true
+      description: Account opening date
+
+    - name: closed_date
+      data_type: date
+      description: Account closure date (if closed)
+
+    # Limits and rates
+    - name: credit_limit
+      data_type: $domain.monetary_amount
+      description: Credit limit (for credit accounts)
+
+    - name: interest_rate
+      data_type: $domain.interest_rate
+      description: Current interest rate
+
+    - name: overdraft_limit
+      data_type: $domain.monetary_amount
+      default: 0
+      description: Overdraft limit
+
+    # Branch info
+    - name: branch_code
+      data_type: string
+      description: Managing branch code
+
+    - name: relationship_manager_id
+      data_type: string
+      description: Assigned relationship manager
+
+    # SCD2 tracking
+    - name: _valid_from
+      data_type: timestamp
+      scd2_from: true
+      not_null: true
+
+    - name: _valid_to
+      data_type: timestamp
+      scd2_to: true
+
+    - name: _is_current
+      data_type: boolean
+      scd2_current: true
+
+    # Audit
+    - name: _loaded_at
+      data_type: timestamp
+      not_null: true
+
+    - name: _source_system
+      data_type: string
+      not_null: true
+
+  indexes:
+    - name: idx_account_bk
+      columns: [account_id]
+
+    - name: idx_account_customer
+      columns: [customer_sk, _is_current]
+
+    - name: idx_account_product
+      columns: [product_category, status]

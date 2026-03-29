@@ -1,0 +1,164 @@
+# Date Dimension
+# Pre-populated calendar dimension
+
+entity:
+  name: dim_date
+  stereotype: dim_reference
+  layer: gold
+  description: |
+    Standard date dimension with fiscal calendar support.
+    Pre-populated for 20 years (2020-2040).
+    Supports both calendar and fiscal year hierarchies.
+  owner: platform-team
+  tags: [reference, static]
+
+  columns:
+    # Keys
+    - name: date_sk
+      data_type: int
+      primary_key: true
+      description: Surrogate key (YYYYMMDD format)
+
+    - name: date_value
+      data_type: date
+      business_key: true
+      not_null: true
+      description: Actual date
+
+    # Calendar hierarchy
+    - name: day_of_week
+      data_type: int
+      not_null: true
+      description: Day of week (1=Monday, 7=Sunday)
+
+    - name: day_of_month
+      data_type: int
+      not_null: true
+      description: Day of month (1-31)
+
+    - name: day_of_year
+      data_type: int
+      not_null: true
+      description: Day of year (1-366)
+
+    - name: week_of_year
+      data_type: int
+      not_null: true
+      description: ISO week number
+
+    - name: month_number
+      data_type: int
+      not_null: true
+      description: Month number (1-12)
+
+    - name: month_name
+      data_type: string
+      not_null: true
+      description: Month name (January, February, ...)
+
+    - name: month_name_short
+      data_type: string
+      not_null: true
+      description: Short month name (Jan, Feb, ...)
+
+    - name: quarter_number
+      data_type: int
+      not_null: true
+      description: Quarter (1-4)
+
+    - name: quarter_name
+      data_type: string
+      not_null: true
+      description: Quarter name (Q1, Q2, Q3, Q4)
+
+    - name: year_number
+      data_type: int
+      not_null: true
+      description: Calendar year
+
+    - name: year_month
+      data_type: string
+      not_null: true
+      description: Year-month (YYYY-MM)
+
+    - name: year_quarter
+      data_type: string
+      not_null: true
+      description: Year-quarter (YYYY-Q1)
+
+    # Day names
+    - name: day_name
+      data_type: string
+      not_null: true
+      description: Day name (Monday, Tuesday, ...)
+
+    - name: day_name_short
+      data_type: string
+      not_null: true
+      description: Short day name (Mon, Tue, ...)
+
+    # Flags
+    - name: is_weekend
+      data_type: boolean
+      not_null: true
+      description: Saturday or Sunday
+
+    - name: is_holiday
+      data_type: boolean
+      not_null: true
+      default: false
+      description: Public holiday flag
+
+    - name: holiday_name
+      data_type: string
+      description: Holiday name if applicable
+
+    - name: is_business_day
+      data_type: boolean
+      not_null: true
+      description: Working day (not weekend, not holiday)
+
+    # Fiscal calendar (example: fiscal year starts April 1)
+    - name: fiscal_year
+      data_type: int
+      not_null: true
+      description: Fiscal year
+
+    - name: fiscal_quarter
+      data_type: int
+      not_null: true
+      description: Fiscal quarter (1-4)
+
+    - name: fiscal_month
+      data_type: int
+      not_null: true
+      description: Fiscal month (1-12)
+
+    - name: fiscal_week
+      data_type: int
+      not_null: true
+      description: Fiscal week
+
+    # Relative flags (set by daily job)
+    - name: is_current_day
+      data_type: boolean
+      default: false
+      description: Today flag
+
+    - name: is_current_month
+      data_type: boolean
+      default: false
+      description: Current month flag
+
+    - name: is_current_year
+      data_type: boolean
+      default: false
+      description: Current year flag
+
+  indexes:
+    - name: idx_date_value
+      columns: [date_value]
+      unique: true
+
+    - name: idx_date_year_month
+      columns: [year_number, month_number]

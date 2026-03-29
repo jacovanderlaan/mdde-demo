@@ -1,0 +1,190 @@
+# Transaction Fact Table
+# Financial transactions at atomic grain
+
+entity:
+  name: fact_transaction
+  stereotype: fact
+  layer: gold
+  description: |
+    Atomic transaction fact table at individual transaction grain.
+    One row per financial transaction.
+    Supports balance calculations and transaction analysis.
+  owner: transaction-domain-team
+  tags: [financial, audit-critical]
+
+  columns:
+    # Keys
+    - name: transaction_sk
+      data_type: bigint
+      primary_key: true
+      description: Surrogate key
+
+    - name: transaction_id
+      data_type: string
+      business_key: true
+      not_null: true
+      description: Transaction reference number
+
+    # Dimension keys
+    - name: account_sk
+      data_type: bigint
+      foreign_key: dim_account.account_sk
+      not_null: true
+      description: Account dimension key
+
+    - name: customer_sk
+      data_type: bigint
+      foreign_key: dim_customer.customer_sk
+      not_null: true
+      description: Customer dimension key (denormalized)
+
+    - name: product_sk
+      data_type: bigint
+      foreign_key: dim_product.product_sk
+      not_null: true
+      description: Product dimension key
+
+    - name: transaction_date_sk
+      data_type: int
+      foreign_key: dim_date.date_sk
+      not_null: true
+      description: Transaction date key
+
+    - name: posting_date_sk
+      data_type: int
+      foreign_key: dim_date.date_sk
+      not_null: true
+      description: Posting date key
+
+    - name: value_date_sk
+      data_type: int
+      foreign_key: dim_date.date_sk
+      not_null: true
+      description: Value date key
+
+    # Transaction details
+    - name: transaction_type
+      data_type: $domain.transaction_type
+      not_null: true
+      description: Transaction type
+
+    - name: transaction_code
+      data_type: string
+      description: Bank transaction code
+
+    - name: description
+      data_type: string
+      description: Transaction description
+
+    - name: reference
+      data_type: string
+      description: Customer/payment reference
+
+    # Counterparty (for transfers)
+    - name: counterparty_name
+      data_type: string
+      pii: true
+      description: Counterparty name
+
+    - name: counterparty_iban
+      data_type: $domain.iban
+      pii: true
+      description: Counterparty IBAN
+
+    # Amounts
+    - name: amount
+      data_type: $domain.monetary_amount
+      not_null: true
+      description: Transaction amount (signed)
+
+    - name: amount_credit
+      data_type: $domain.monetary_amount
+      default: 0
+      description: Credit amount (positive)
+
+    - name: amount_debit
+      data_type: $domain.monetary_amount
+      default: 0
+      description: Debit amount (positive)
+
+    - name: currency_code
+      data_type: $domain.currency_code
+      not_null: true
+      description: Transaction currency
+
+    - name: amount_eur
+      data_type: $domain.monetary_amount
+      description: Amount in EUR (for reporting)
+
+    - name: exchange_rate
+      data_type: decimal(18,6)
+      description: Exchange rate to EUR
+
+    # Balance
+    - name: balance_after
+      data_type: $domain.monetary_amount
+      description: Account balance after transaction
+
+    # Timestamps
+    - name: transaction_timestamp
+      data_type: timestamp
+      not_null: true
+      description: Exact transaction time
+
+    - name: posting_timestamp
+      data_type: timestamp
+      description: Posting timestamp
+
+    # Channel
+    - name: channel
+      data_type: string
+      allowed_values: [branch, atm, online, mobile, api, batch]
+      description: Transaction channel
+
+    - name: device_id
+      data_type: string
+      description: Device identifier (hashed)
+
+    # Status
+    - name: status
+      data_type: string
+      allowed_values: [pending, posted, reversed, failed]
+      not_null: true
+      description: Transaction status
+
+    - name: reversal_flag
+      data_type: boolean
+      default: false
+      description: Is this a reversal
+
+    - name: original_transaction_id
+      data_type: string
+      description: Original transaction if reversal
+
+    # Audit
+    - name: _loaded_at
+      data_type: timestamp
+      not_null: true
+
+    - name: _source_system
+      data_type: string
+      not_null: true
+
+    - name: _batch_id
+      data_type: string
+      description: ETL batch identifier
+
+  indexes:
+    - name: idx_transaction_id
+      columns: [transaction_id]
+      unique: true
+
+    - name: idx_transaction_account_date
+      columns: [account_sk, transaction_date_sk]
+
+    - name: idx_transaction_customer_date
+      columns: [customer_sk, transaction_date_sk]
+
+  partitioning:
+    columns: [transaction_date_sk]
+    type: range

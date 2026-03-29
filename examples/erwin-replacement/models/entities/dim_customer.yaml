@@ -1,0 +1,136 @@
+# Customer Dimension (SCD Type 2)
+# Tracks full history of customer attributes
+
+entity:
+  name: dim_customer
+  stereotype: dim_scd2
+  layer: gold
+  description: |
+    Customer dimension with full history tracking.
+    Business key is customer_id from the CRM system.
+    Tracks changes to name, contact info, and segment over time.
+  owner: customer-domain-team
+  tags: [pii, gdpr-relevant]
+
+  columns:
+    # Keys
+    - name: customer_sk
+      data_type: bigint
+      primary_key: true
+      description: Surrogate key (auto-generated)
+
+    - name: customer_id
+      data_type: string
+      business_key: true
+      not_null: true
+      description: Natural key from CRM system (CRM_CUST_ID)
+
+    # Core attributes
+    - name: customer_name
+      data_type: string
+      not_null: true
+      pii: true
+      description: Full legal name
+
+    - name: customer_type
+      data_type: string
+      allowed_values: [individual, business]
+      not_null: true
+      description: Individual or business customer
+
+    - name: segment
+      data_type: $domain.customer_segment
+      description: Customer segmentation tier
+
+    # Contact information
+    - name: email
+      data_type: $domain.email_address
+      pii: true
+      masking: hash
+      description: Primary email address
+
+    - name: phone
+      data_type: $domain.phone_number
+      pii: true
+      masking: partial
+      description: Primary phone number
+
+    # Address (denormalized for query performance)
+    - name: address_line1
+      data_type: string
+      pii: true
+      description: Street address
+
+    - name: city
+      data_type: string
+      description: City
+
+    - name: postal_code
+      data_type: string
+      description: Postal/ZIP code
+
+    - name: country_code
+      data_type: $domain.country_code
+      description: Country (ISO 3166-1)
+
+    # Risk and compliance
+    - name: kyc_status
+      data_type: string
+      allowed_values: [pending, verified, expired, rejected]
+      description: Know Your Customer verification status
+
+    - name: risk_rating
+      data_type: $domain.risk_rating
+      description: Customer risk assessment
+
+    - name: pep_flag
+      data_type: boolean
+      default: false
+      description: Politically Exposed Person indicator
+
+    # Dates
+    - name: onboarding_date
+      data_type: date
+      description: Date customer was onboarded
+
+    - name: last_activity_date
+      data_type: date
+      description: Date of last account activity
+
+    # SCD2 tracking
+    - name: _valid_from
+      data_type: timestamp
+      scd2_from: true
+      not_null: true
+      description: Record validity start
+
+    - name: _valid_to
+      data_type: timestamp
+      scd2_to: true
+      description: Record validity end (NULL = current)
+
+    - name: _is_current
+      data_type: boolean
+      scd2_current: true
+      description: Current record flag
+
+    # Audit
+    - name: _loaded_at
+      data_type: timestamp
+      not_null: true
+      description: ETL load timestamp
+
+    - name: _source_system
+      data_type: string
+      not_null: true
+      description: Source system identifier
+
+  indexes:
+    - name: idx_customer_bk
+      columns: [customer_id]
+      unique: false
+      description: Business key lookup
+
+    - name: idx_customer_current
+      columns: [customer_id, _is_current]
+      description: Current record lookup

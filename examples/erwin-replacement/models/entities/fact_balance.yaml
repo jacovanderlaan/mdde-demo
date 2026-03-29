@@ -1,0 +1,163 @@
+# Daily Balance Snapshot Fact
+# Account balances at end of each day
+
+entity:
+  name: fact_balance
+  stereotype: fact_snapshot
+  layer: gold
+  description: |
+    Periodic snapshot of account balances at end of business day.
+    One row per account per day.
+    Enables point-in-time balance reporting and trend analysis.
+  owner: balance-domain-team
+  tags: [financial, regulatory]
+
+  columns:
+    # Composite key
+    - name: account_sk
+      data_type: bigint
+      primary_key: true
+      foreign_key: dim_account.account_sk
+      description: Account dimension key
+
+    - name: balance_date_sk
+      data_type: int
+      primary_key: true
+      foreign_key: dim_date.date_sk
+      description: Balance date key
+
+    # Additional dimensions
+    - name: customer_sk
+      data_type: bigint
+      foreign_key: dim_customer.customer_sk
+      not_null: true
+      description: Customer dimension key (denormalized)
+
+    - name: product_sk
+      data_type: bigint
+      foreign_key: dim_product.product_sk
+      not_null: true
+      description: Product dimension key
+
+    # Balance measures
+    - name: balance_opening
+      data_type: $domain.monetary_amount
+      not_null: true
+      description: Opening balance (start of day)
+
+    - name: balance_closing
+      data_type: $domain.monetary_amount
+      not_null: true
+      description: Closing balance (end of day)
+
+    - name: balance_average
+      data_type: $domain.monetary_amount
+      description: Average balance during day
+
+    - name: balance_minimum
+      data_type: $domain.monetary_amount
+      description: Minimum balance during day
+
+    - name: balance_maximum
+      data_type: $domain.monetary_amount
+      description: Maximum balance during day
+
+    - name: currency_code
+      data_type: $domain.currency_code
+      not_null: true
+      description: Balance currency
+
+    - name: balance_closing_eur
+      data_type: $domain.monetary_amount
+      description: Closing balance in EUR
+
+    # Activity measures
+    - name: transaction_count
+      data_type: int
+      default: 0
+      description: Number of transactions on this day
+
+    - name: credit_count
+      data_type: int
+      default: 0
+      description: Number of credit transactions
+
+    - name: debit_count
+      data_type: int
+      default: 0
+      description: Number of debit transactions
+
+    - name: total_credits
+      data_type: $domain.monetary_amount
+      default: 0
+      description: Sum of credit transactions
+
+    - name: total_debits
+      data_type: $domain.monetary_amount
+      default: 0
+      description: Sum of debit transactions
+
+    - name: net_change
+      data_type: $domain.monetary_amount
+      default: 0
+      description: Net balance change (credits - debits)
+
+    # Interest
+    - name: accrued_interest
+      data_type: $domain.monetary_amount
+      default: 0
+      description: Interest accrued on this day
+
+    - name: interest_rate_applied
+      data_type: $domain.interest_rate
+      description: Interest rate applied
+
+    # Overdraft
+    - name: overdraft_used
+      data_type: $domain.monetary_amount
+      default: 0
+      description: Overdraft amount used (if negative balance)
+
+    - name: overdraft_limit
+      data_type: $domain.monetary_amount
+      description: Overdraft limit on this day
+
+    - name: overdraft_available
+      data_type: $domain.monetary_amount
+      description: Remaining overdraft capacity
+
+    # Status flags
+    - name: is_dormant
+      data_type: boolean
+      default: false
+      description: No activity in 12+ months
+
+    - name: is_overdrawn
+      data_type: boolean
+      default: false
+      description: Balance below zero
+
+    - name: is_below_minimum
+      data_type: boolean
+      default: false
+      description: Below minimum balance requirement
+
+    # Audit
+    - name: _loaded_at
+      data_type: timestamp
+      not_null: true
+
+    - name: _source_system
+      data_type: string
+      not_null: true
+
+  indexes:
+    - name: idx_balance_date
+      columns: [balance_date_sk]
+
+    - name: idx_balance_customer_date
+      columns: [customer_sk, balance_date_sk]
+
+  partitioning:
+    columns: [balance_date_sk]
+    type: range

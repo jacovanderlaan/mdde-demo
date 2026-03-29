@@ -1,0 +1,124 @@
+# Banking Model Relationships
+# Foreign key definitions between entities
+
+relationships:
+  # Customer -> Account (1:N)
+  - relationship:
+      name: customer_has_accounts
+      from_entity: dim_customer
+      from_column: customer_sk
+      to_entity: dim_account
+      to_column: customer_sk
+      cardinality: one_to_many
+      description: A customer can have multiple accounts
+
+  # Product -> Account (1:N)
+  - relationship:
+      name: product_for_accounts
+      from_entity: dim_product
+      from_column: product_sk
+      to_entity: dim_account
+      to_column: product_sk
+      cardinality: one_to_many
+      description: A product can be used by multiple accounts
+
+  # Account -> Transaction (1:N)
+  - relationship:
+      name: account_has_transactions
+      from_entity: dim_account
+      from_column: account_sk
+      to_entity: fact_transaction
+      to_column: account_sk
+      cardinality: one_to_many
+      description: An account has many transactions
+
+  # Customer -> Transaction (1:N, denormalized)
+  - relationship:
+      name: customer_has_transactions
+      from_entity: dim_customer
+      from_column: customer_sk
+      to_entity: fact_transaction
+      to_column: customer_sk
+      cardinality: one_to_many
+      description: Customer link for direct queries (denormalized)
+
+  # Product -> Transaction (1:N)
+  - relationship:
+      name: product_for_transactions
+      from_entity: dim_product
+      from_column: product_sk
+      to_entity: fact_transaction
+      to_column: product_sk
+      cardinality: one_to_many
+      description: Product link for transactions
+
+  # Date -> Transaction (multiple roles)
+  - relationship:
+      name: transaction_date
+      from_entity: dim_date
+      from_column: date_sk
+      to_entity: fact_transaction
+      to_column: transaction_date_sk
+      cardinality: one_to_many
+      role: transaction_date
+      description: Transaction date
+
+  - relationship:
+      name: posting_date
+      from_entity: dim_date
+      from_column: date_sk
+      to_entity: fact_transaction
+      to_column: posting_date_sk
+      cardinality: one_to_many
+      role: posting_date
+      description: Posting date
+
+  - relationship:
+      name: value_date
+      from_entity: dim_date
+      from_column: date_sk
+      to_entity: fact_transaction
+      to_column: value_date_sk
+      cardinality: one_to_many
+      role: value_date
+      description: Value date
+
+  # Account -> Balance (1:N)
+  - relationship:
+      name: account_has_balances
+      from_entity: dim_account
+      from_column: account_sk
+      to_entity: fact_balance
+      to_column: account_sk
+      cardinality: one_to_many
+      description: Daily balance snapshots per account
+
+  # Customer -> Balance (1:N, denormalized)
+  - relationship:
+      name: customer_has_balances
+      from_entity: dim_customer
+      from_column: customer_sk
+      to_entity: fact_balance
+      to_column: customer_sk
+      cardinality: one_to_many
+      description: Customer link for direct queries
+
+  # Product -> Balance (1:N)
+  - relationship:
+      name: product_for_balances
+      from_entity: dim_product
+      from_column: product_sk
+      to_entity: fact_balance
+      to_column: product_sk
+      cardinality: one_to_many
+      description: Product link for balances
+
+  # Date -> Balance
+  - relationship:
+      name: balance_date
+      from_entity: dim_date
+      from_column: date_sk
+      to_entity: fact_balance
+      to_column: balance_date_sk
+      cardinality: one_to_many
+      description: Balance date

@@ -1,0 +1,122 @@
+# Product Dimension (SCD Type 1)
+# Banking products and their attributes
+
+entity:
+  name: dim_product
+  stereotype: dim_scd1
+  layer: gold
+  description: |
+    Product reference dimension for banking products.
+    SCD Type 1 - overwrites with latest values.
+    Products rarely change; when they do, we want current state.
+  owner: product-domain-team
+  tags: [reference]
+
+  columns:
+    # Keys
+    - name: product_sk
+      data_type: bigint
+      primary_key: true
+      description: Surrogate key
+
+    - name: product_code
+      data_type: string
+      business_key: true
+      not_null: true
+      description: Product identifier
+
+    # Product details
+    - name: product_name
+      data_type: string
+      not_null: true
+      description: Marketing product name
+
+    - name: product_category
+      data_type: $domain.product_category
+      not_null: true
+      description: Product category
+
+    - name: product_family
+      data_type: string
+      description: Product family grouping
+
+    - name: description
+      data_type: string
+      description: Product description
+
+    # Pricing
+    - name: base_interest_rate
+      data_type: $domain.interest_rate
+      description: Base interest rate
+
+    - name: fee_monthly
+      data_type: $domain.monetary_amount
+      default: 0
+      description: Monthly maintenance fee
+
+    - name: fee_annual
+      data_type: $domain.monetary_amount
+      default: 0
+      description: Annual fee
+
+    - name: min_balance
+      data_type: $domain.monetary_amount
+      default: 0
+      description: Minimum balance requirement
+
+    # Features
+    - name: has_overdraft
+      data_type: boolean
+      default: false
+      description: Overdraft available
+
+    - name: has_online_banking
+      data_type: boolean
+      default: true
+      description: Online banking enabled
+
+    - name: has_mobile_app
+      data_type: boolean
+      default: true
+      description: Mobile app access
+
+    - name: has_debit_card
+      data_type: boolean
+      default: false
+      description: Debit card included
+
+    # Availability
+    - name: is_active
+      data_type: boolean
+      not_null: true
+      default: true
+      description: Product available for new accounts
+
+    - name: launch_date
+      data_type: date
+      description: Product launch date
+
+    - name: end_date
+      data_type: date
+      description: Product end-of-sale date
+
+    - name: target_segment
+      data_type: $domain.customer_segment
+      description: Target customer segment
+
+    # Audit
+    - name: _loaded_at
+      data_type: timestamp
+      not_null: true
+
+    - name: _source_system
+      data_type: string
+      not_null: true
+
+  indexes:
+    - name: idx_product_code
+      columns: [product_code]
+      unique: true
+
+    - name: idx_product_category
+      columns: [product_category, is_active]
