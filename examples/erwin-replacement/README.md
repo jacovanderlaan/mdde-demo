@@ -269,6 +269,31 @@ No more "what changed in the .erwin file?"
 3. **Generate documentation** - Auto-publish data dictionary
 4. **Integrate with dbt** - Generate dbt models from YAML
 
+## Where transformations + mappings live
+
+This VSCode workflow handles the **data model** — entities,
+relationships, domains. It does not author the transformation logic
+that populates the warehouse, nor the mappings that link targets to
+sources.
+
+Those live in the **CTE notebook** (
+[`mdde-migrations/common/tools/databricks/cte_notebook`](https://github.com/jacovanderlaan/mdde-migrations/tree/main/common/tools/databricks/cte_notebook)
+), MDDE's second authoring tool. The two are paired by persona:
+
+| Persona | Tool | Authors |
+|---|---|---|
+| Architect / senior modeller | VSCode (this demo) | Entities, relationships, domains |
+| Analyst + engineer | CTE notebook | Pipeline transformations (via DSL recipe cells) |
+
+**Mappings** — the manifests that declare "this target entity is
+produced from these sources via this pipeline" — are *generated* by
+the notebook when a pipeline is saved, and committed alongside the
+pipeline YAML. VSCode reads these manifests to show "produced by ..."
+navigation in the entity pane; it does not edit them.
+
+See [ADR-026 — Mappings live in notebooks, not VSCode](https://github.com/jacovanderlaan/mdde-migrations/blob/main/common/tools/databricks/cte_notebook/docs/adrs/adr-026-mappings-live-in-notebooks.md)
+for the design record.
+
 ## Related Resources
 
 - [Medium Article: Building Your Own erwin in VS Code](../articles/2026-03-29_Building-Your-Own-Erwin-Data-Modeler-in-VS-Code.md)
