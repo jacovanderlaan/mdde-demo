@@ -282,7 +282,7 @@ Those live in the **CTE notebook** (
 
 | Persona | Tool | Authors |
 |---|---|---|
-| Architect / senior modeller | VSCode (this demo) | Entities, relationships, domains |
+| Data modeler | VSCode (this demo) | Entities, relationships, domains |
 | Analyst + engineer | CTE notebook | Pipeline transformations (via DSL recipe cells) |
 
 **Mappings** — the manifests that declare "this target entity is
