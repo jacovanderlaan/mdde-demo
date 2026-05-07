@@ -14,11 +14,11 @@ outputs:
 - name: customer_id
   from_sources:
   - c.customer_id
-  derivation: direct
+  derivation: rename
 - name: email
   from_sources:
   - c.email
-  derivation: direct
+  derivation: rename
 - name: latest_order_id
   from_sources:
   - l.order_id

@@ -9,32 +9,32 @@ sources:
 outputs:
 - name: customer_id
   from_sources:
-  - <inherited>.customer_id
+  - raw_customers.customer_id
   derivation: expression
 - name: first_name
   from_sources:
-  - <inherited>.first_name
+  - raw_customers.first_name
   derivation: expression
 - name: last_name
   from_sources:
-  - <inherited>.last_name
+  - raw_customers.last_name
   derivation: expression
 - name: email
   from_sources:
-  - <inherited>.email
+  - raw_customers.email
   derivation: expression
 - name: phone
   from_sources:
-  - <inherited>.phone
+  - raw_customers.phone
   derivation: expression
 - name: created_at
   from_sources:
-  - <inherited>.created_at
+  - raw_customers.created_at
   derivation: expression
 - name: source_system
   from_sources:
-  - <inherited>.source_system
-  derivation: direct
+  - raw_customers.source_system
+  derivation: rename
 contract:
   owner: <unknown>
   freshness_minutes: 60

@@ -1,0 +1,72 @@
+# Optional metadata file consumed by sqlglot.qualify().
+#
+# Lists every table referenced in any *.sql in this folder, along with
+# its column names + types. The qualify() pass uses this to:
+#   - resolve bare column refs (`email` -> `c.email`)
+#   - expand SELECT * into explicit columns
+#   - validate that referenced columns exist
+#
+# When this file is present, the script picks it up automatically.
+# Override with `--metadata <other-path>` if you want to point at a
+# different file (e.g. one shared across multiple input folders).
+#
+# Types are dialect-agnostic — sqlglot uses them for resolution, not
+# validation. Use whatever shape your team writes.
+
+sources:
+
+  # ------------------------------------------------------------------
+  # Upstream landing tables (referenced from raw_*.sql)
+  # ------------------------------------------------------------------
+
+  landing.crm_customers_export:
+    customer_id: BIGINT
+    first_name: VARCHAR
+    last_name: VARCHAR
+    email: VARCHAR
+    phone: VARCHAR
+    created_at: TIMESTAMP
+    source_system: VARCHAR
+    _ingested_at: TIMESTAMP
+
+  landing.oms_orders_export:
+    order_id: BIGINT
+    customer_id: BIGINT
+    order_date: DATE
+    order_status: VARCHAR
+    total_amount: DECIMAL
+    currency: VARCHAR
+    source_system: VARCHAR
+
+  # ------------------------------------------------------------------
+  # In-folder views (referenced by the dependent SQL files in this
+  # folder). Listed here so dependent files can also be qualified
+  # without first running the script on their upstream.
+  # ------------------------------------------------------------------
+
+  raw_customers:
+    customer_id: BIGINT
+    first_name: VARCHAR
+    last_name: VARCHAR
+    email: VARCHAR
+    phone: VARCHAR
+    created_at: TIMESTAMP
+    source_system: VARCHAR
+
+  raw_orders:
+    order_id: BIGINT
+    customer_id: BIGINT
+    order_date: DATE
+    order_status: VARCHAR
+    total_amount: DECIMAL
+    currency: VARCHAR
+    source_system: VARCHAR
+
+  stg_customers:
+    customer_id: BIGINT
+    first_name: VARCHAR
+    last_name: VARCHAR
+    email: VARCHAR
+    phone: VARCHAR
+    created_at: TIMESTAMP
+    source_system: VARCHAR

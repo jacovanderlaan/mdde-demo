@@ -7,62 +7,62 @@ source_entities:
 - raw_orders
 attributes:
 - target: customer_id
-  derivation: direct
-  expression: rc.customer_id /* @pk @business_key */
+  derivation: rename
+  expression: '"rc"."customer_id" /* @pk @business_key */ AS "customer_id"'
   sources:
   - entity: rc
     attribute: customer_id
 - target: email
-  derivation: direct
-  expression: c.email /* @pii */
+  derivation: rename
+  expression: '"c"."email" /* @pii */ AS "email"'
   sources:
   - entity: c
     attribute: email
 - target: first_name
-  derivation: direct
-  expression: c.first_name /* @pii */
+  derivation: rename
+  expression: '"c"."first_name" /* @pii */ AS "first_name"'
   sources:
   - entity: c
     attribute: first_name
 - target: last_name
-  derivation: direct
-  expression: c.last_name /* @pii */
+  derivation: rename
+  expression: '"c"."last_name" /* @pii */ AS "last_name"'
   sources:
   - entity: c
     attribute: last_name
 - target: order_count
-  derivation: direct
-  expression: rc.order_count
+  derivation: rename
+  expression: '"rc"."order_count" AS "order_count"'
   sources:
   - entity: rc
     attribute: order_count
 - target: total_revenue
-  derivation: direct
-  expression: rc.total_revenue
+  derivation: rename
+  expression: '"rc"."total_revenue" AS "total_revenue"'
   sources:
   - entity: rc
     attribute: total_revenue
 - target: avg_orders_overall
-  derivation: direct
-  expression: rc.avg_orders_overall
+  derivation: rename
+  expression: '"rc"."avg_orders_overall" AS "avg_orders_overall"'
   sources:
   - entity: rc
     attribute: avg_orders_overall
 - target: max_revenue_overall
-  derivation: direct
-  expression: rc.max_revenue_overall
+  derivation: rename
+  expression: '"rc"."max_revenue_overall" AS "max_revenue_overall"'
   sources:
   - entity: rc
     attribute: max_revenue_overall
 - target: revenue_rank
-  derivation: direct
-  expression: rc.revenue_rank /* @derived */
+  derivation: rename
+  expression: '"rc"."revenue_rank" /* @derived */ AS "revenue_rank"'
   sources:
   - entity: rc
     attribute: revenue_rank
 - target: segment
-  derivation: direct
-  expression: rc.segment /* @derived */
+  derivation: rename
+  expression: '"rc"."segment" /* @derived */ AS "segment"'
   sources:
   - entity: rc
     attribute: segment

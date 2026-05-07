@@ -7,47 +7,49 @@ source_entities:
 attributes:
 - target: customer_id
   derivation: expression
-  expression: CAST(customer_id AS BIGINT) AS customer_id /* @pk @business_key */
+  expression: CAST("raw_customers"."customer_id" AS BIGINT) AS "customer_id" /* @pk
+    @business_key */
   sources:
-  - entity: <inherited>
+  - entity: raw_customers
     attribute: customer_id
 - target: first_name
   derivation: expression
-  expression: TRIM(first_name) AS first_name /* @pii */
+  expression: TRIM("raw_customers"."first_name") AS "first_name" /* @pii */
   sources:
-  - entity: <inherited>
+  - entity: raw_customers
     attribute: first_name
   tags:
   - pii
 - target: last_name
   derivation: expression
-  expression: TRIM(last_name) AS last_name /* @pii */
+  expression: TRIM("raw_customers"."last_name") AS "last_name" /* @pii */
   sources:
-  - entity: <inherited>
+  - entity: raw_customers
     attribute: last_name
   tags:
   - pii
 - target: email
   derivation: expression
-  expression: LOWER(TRIM(email)) AS email /* @pii */
+  expression: LOWER(TRIM("raw_customers"."email")) AS "email" /* @pii */
   sources:
-  - entity: <inherited>
+  - entity: raw_customers
     attribute: email
 - target: phone
   derivation: expression
-  expression: NULLIF(TRIM(phone), '') AS phone /* @pii @nullable */
+  expression: NULLIF(TRIM("raw_customers"."phone"), '') AS "phone" /* @pii @nullable
+    */
   sources:
-  - entity: <inherited>
+  - entity: raw_customers
     attribute: phone
 - target: created_at
   derivation: expression
-  expression: CAST(created_at AS TIMESTAMP) AS created_at
+  expression: CAST("raw_customers"."created_at" AS TIMESTAMP) AS "created_at"
   sources:
-  - entity: <inherited>
+  - entity: raw_customers
     attribute: created_at
 - target: source_system
-  derivation: direct
-  expression: source_system
+  derivation: rename
+  expression: '"raw_customers"."source_system" AS "source_system"'
   sources:
-  - entity: <inherited>
+  - entity: raw_customers
     attribute: source_system

@@ -4,15 +4,15 @@ Files processed: **7**
 
 ## Files
 
-| File | Entity | Layer | CTEs | Sources | Output cols | Quality issues |
-|---|---|---|---|---|---|---|
-| `customer_latest_orders.sql` | customer_latest_orders | business | 2 | 2 | 6 | 5 |
-| `customer_revenue.sql` | customer_revenue_clean | business | 2 | 2 | 7 | 4 |
-| `customer_revenue_bad.sql` | customer_revenue | business | 2 | 2 | 0 | 10 |
-| `customer_segment_analytics.sql` | customer_segment_analytics | business | 3 | 2 | 10 | 8 |
-| `raw_customers.sql` | raw_customers | source | 0 | 1 | 7 | 2 |
-| `raw_orders.sql` | raw_orders | source | 0 | 1 | 7 | 2 |
-| `stg_customers.sql` | stg_customers | staging | 0 | 1 | 7 | 2 |
+| File | Entity | Layer | Qualified | CTEs | Sources | Output cols | Quality issues |
+|---|---|---|---|---|---|---|---|
+| `customer_latest_orders.sql` | customer_latest_orders | business | yes | 2 | 2 | 6 | 5 |
+| `customer_revenue.sql` | customer_revenue_clean | business | yes | 2 | 2 | 7 | 4 |
+| `customer_revenue_bad.sql` | customer_revenue | business | yes | 2 | 2 | 10 | 10 |
+| `customer_segment_analytics.sql` | customer_segment_analytics | business | yes | 3 | 2 | 10 | 8 |
+| `raw_customers.sql` | raw_customers | source | yes | 0 | 1 | 7 | 2 |
+| `raw_orders.sql` | raw_orders | source | yes | 0 | 1 | 7 | 2 |
+| `stg_customers.sql` | stg_customers | staging | yes | 0 | 1 | 7 | 2 |
 
 ## Quality findings
 
@@ -57,7 +57,7 @@ Files processed: **7**
 
 ## Mapping coverage
 
-**44/44** output columns have a resolved source attribute (100%)
+**54/54** output columns have a resolved source attribute (100%)
 
 ## SQL-First annotations
 

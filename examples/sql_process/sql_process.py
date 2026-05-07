@@ -51,7 +51,112 @@ if _HERE not in sys.path:
     sys.path.insert(0, _HERE)
 
 import sqlglot
+import yaml
 from sqlglot import exp
+
+
+# =============================================================================
+# 0. METADATA SCHEMA (optional input — used by sqlglot's qualify() pass)
+# =============================================================================
+
+
+@dataclass
+class MetadataSchema:
+    """A registry of source tables and their column types.
+
+    Used by sqlglot.optimizer.qualify() to:
+      - resolve bare column references to their owning table
+      - expand SELECT * into explicit column lists
+      - validate that referenced columns actually exist
+
+    Loaded from a YAML file in this shape::
+
+        # _metadata.yaml
+        sources:
+          customers:
+            customer_id: BIGINT
+            email: VARCHAR
+            name: VARCHAR
+          orders:
+            order_id: BIGINT
+            customer_id: BIGINT
+            total: DECIMAL
+
+    Table names may be qualified (``catalog.db.table`` or ``db.table``).
+    Column types are dialect-agnostic — sqlglot uses them to resolve
+    references, not to validate types.
+    """
+
+    tables: Dict[str, Dict[str, str]] = field(default_factory=dict)
+
+    @classmethod
+    def from_yaml(cls, path: Path) -> "MetadataSchema":
+        with open(path, "r", encoding="utf-8") as f:
+            data = yaml.safe_load(f) or {}
+        sources = data.get("sources") or {}
+        # Defensive: each table maps to a dict of {col: type}.
+        clean: Dict[str, Dict[str, str]] = {}
+        for table, cols in sources.items():
+            if not isinstance(cols, dict):
+                continue
+            clean[str(table)] = {
+                str(name): str(dtype) for name, dtype in cols.items()
+            }
+        return cls(tables=clean)
+
+    def to_sqlglot_schema(self) -> Dict[str, Any]:
+        """Return the dict shape sqlglot.optimizer.qualify() expects.
+
+        sqlglot's qualify() needs a uniform nesting depth across
+        every table. Mixing ``landing.crm_customers_export`` (depth 2)
+        with ``raw_customers`` (depth 1) raises a SchemaError. The
+        workaround: park unqualified table names under an empty-string
+        key (``""``), so every entry sits at depth 2.
+
+        Example output::
+
+            {
+                "landing": {
+                    "crm_customers_export": {"customer_id": "BIGINT", ...}
+                },
+                "": {
+                    "raw_customers": {"customer_id": "BIGINT", ...}
+                }
+            }
+        """
+        out: Dict[str, Any] = {}
+        for fq_name, cols in self.tables.items():
+            parts = fq_name.split(".")
+            if len(parts) == 1:
+                cursor = out.setdefault("", {})
+                cursor[parts[0]] = dict(cols)
+            else:
+                cursor: Dict[str, Any] = out
+                for part in parts[:-1]:
+                    cursor = cursor.setdefault(part, {})
+                cursor[parts[-1]] = dict(cols)
+        return out
+
+    def __bool__(self) -> bool:
+        return bool(self.tables)
+
+
+def load_metadata(input_dir: Path, override: Optional[Path]) -> MetadataSchema:
+    """Resolve which metadata file to use, if any.
+
+    Lookup order:
+      1. Explicit ``--metadata <path>`` argument (override)
+      2. ``<input_dir>/_metadata.yaml`` if present
+      3. Empty schema (no qualification)
+    """
+    if override is not None:
+        if not override.is_file():
+            raise FileNotFoundError(f"metadata file not found: {override}")
+        return MetadataSchema.from_yaml(override)
+    auto = input_dir / "_metadata.yaml"
+    if auto.is_file():
+        return MetadataSchema.from_yaml(auto)
+    return MetadataSchema()
 
 
 # =============================================================================
@@ -182,10 +287,23 @@ class ParsedFile:
     cte_names: List[str] = field(default_factory=list)
     source_tables: List[str] = field(default_factory=list)
     parse_error: Optional[str] = None
+    qualified: bool = False                  # True iff qualify() succeeded
+    qualify_error: Optional[str] = None      # Reason qualify() was skipped
 
 
-def parse_file(path: Path) -> ParsedFile:
-    """Read a SQL file, extract annotations, parse with sqlglot."""
+def parse_file(
+    path: Path,
+    metadata: Optional[MetadataSchema] = None,
+) -> ParsedFile:
+    """Read a SQL file, extract annotations, parse with sqlglot.
+
+    If ``metadata`` is provided and non-empty, run sqlglot's
+    ``qualify()`` pass on the AST. That resolves bare column refs to
+    their owning table, expands ``SELECT *`` into explicit columns,
+    and validates that referenced columns exist. On failure (e.g.
+    ambiguous columns, columns not in the schema), falls back to
+    the unqualified AST and records the reason in ``qualify_error``.
+    """
     raw_sql = path.read_text(encoding="utf-8")
     annotations = extract_annotations(raw_sql)
     entity_name = annotations.entity.get("entity") or path.stem
@@ -216,6 +334,27 @@ def parse_file(path: Path) -> ParsedFile:
         if target is None and statements:
             target = statements[-1]
         pf.parsed = target
+
+        # Qualify pass — opportunistic, fail-soft per design.
+        if pf.parsed is not None and metadata:
+            try:
+                from sqlglot.optimizer.qualify import qualify
+                pf.parsed = qualify(
+                    pf.parsed,
+                    schema=metadata.to_sqlglot_schema(),
+                    # Don't raise on columns we can't resolve — record
+                    # them and keep going. Lets a partial schema still
+                    # help the columns it does cover.
+                    validate_qualify_columns=False,
+                    # Allow the script to qualify even when not every
+                    # source table has a schema entry.
+                    allow_partial_qualification=True,
+                    # We still want * expanded when possible.
+                    expand_stars=True,
+                )
+                pf.qualified = True
+            except Exception as exc:  # noqa: BLE001 — fail-soft is the design
+                pf.qualify_error = type(exc).__name__ + ": " + str(exc)
 
         if pf.parsed is not None:
             pf.cte_names = _extract_cte_names(pf.parsed)
@@ -622,19 +761,47 @@ def emit_report(
     # Per-file summary
     lines.append("## Files")
     lines.append("")
-    lines.append("| File | Entity | Layer | CTEs | Sources | Output cols | Quality issues |")
-    lines.append("|---|---|---|---|---|---|---|")
+    lines.append("| File | Entity | Layer | Qualified | CTEs | Sources | Output cols | Quality issues |")
+    lines.append("|---|---|---|---|---|---|---|---|")
     for pf in parsed_files:
         findings = findings_per_file.get(pf.path.name, [])
         n_issues = len(findings)
+        if pf.qualified:
+            qual = "yes"
+        elif pf.qualify_error:
+            qual = "skipped"
+        else:
+            qual = "—"
         lines.append(
             f"| `{pf.path.name}` | {pf.entity_name} | "
             f"{pf.annotations.entity.get('layer', '?')} | "
+            f"{qual} | "
             f"{len(pf.cte_names)} | {len(pf.source_tables)} | "
             f"{len([l for l in pf.lineage if l.output_column != '*'])} | "
             f"{n_issues} |"
         )
     lines.append("")
+
+    # Qualify failures — surface so users can fix their schema file.
+    qualify_failures = [pf for pf in parsed_files if pf.qualify_error]
+    if qualify_failures:
+        lines.append("## Qualify skipped")
+        lines.append("")
+        lines.append(
+            "These files could not be qualified (sqlglot.optimizer.qualify "
+            "raised) — lineage extraction fell back to the unqualified "
+            "AST. Usually means a referenced table is missing from the "
+            "metadata file, or a column reference is genuinely ambiguous."
+        )
+        lines.append("")
+        lines.append("| File | Reason |")
+        lines.append("|---|---|")
+        for pf in qualify_failures:
+            reason = pf.qualify_error
+            if len(reason) > 100:
+                reason = reason[:97] + "..."
+            lines.append(f"| `{pf.path.name}` | {reason} |")
+        lines.append("")
 
     # Quality findings
     total_findings: List[QualityFinding] = []
@@ -720,9 +887,6 @@ def emit_report(
 # =============================================================================
 
 
-import yaml  # noqa: E402
-
-
 def write_yaml(path: Path, data: Any) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with open(path, "w", encoding="utf-8") as f:
@@ -738,13 +902,28 @@ def process_folder(
     input_dir: Path,
     output_dir: Path,
     recursive: bool = False,
+    metadata_path: Optional[Path] = None,
 ) -> int:
-    """Run the pipeline. Returns the number of files processed."""
+    """Run the pipeline. Returns the number of files processed.
+
+    If ``metadata_path`` points at a ``_metadata.yaml`` file, the
+    schema is loaded and passed to sqlglot's qualify() pass for each
+    SQL file. If ``metadata_path`` is None, the script auto-discovers
+    ``<input_dir>/_metadata.yaml``. Pass an empty/missing path to
+    skip qualification entirely.
+    """
     pattern = "**/*.sql" if recursive else "*.sql"
     sql_files = sorted(input_dir.glob(pattern))
     if not sql_files:
         print(f"No *.sql files found in {input_dir}", file=sys.stderr)
         return 0
+
+    metadata = load_metadata(input_dir, metadata_path)
+    if metadata:
+        print(
+            f"Metadata loaded: {len(metadata.tables)} table(s) — "
+            f"sqlglot.qualify() will run per file."
+        )
 
     output_dir.mkdir(parents=True, exist_ok=True)
     (output_dir / "optimized").mkdir(exist_ok=True)
@@ -761,7 +940,7 @@ def process_folder(
         rel_key = str(rel).replace("\\", "/")
         rel_stem_parts = list(rel.with_suffix("").parts)
 
-        pf = parse_file(sql_path)
+        pf = parse_file(sql_path, metadata=metadata if metadata else None)
         parsed_files.append(pf)
 
         findings = run_quality_checks(pf)
@@ -821,13 +1000,30 @@ def main(argv: Optional[List[str]] = None) -> int:
         action="store_true",
         help="Recurse into subdirectories (default: top-level only)",
     )
+    parser.add_argument(
+        "--metadata",
+        type=Path,
+        default=None,
+        help=(
+            "Path to a YAML file describing source-table schemas "
+            "(see README for format). Enables sqlglot.qualify() — "
+            "resolves bare column refs to their owning table and "
+            "expands SELECT * into explicit column lists. If omitted, "
+            "the script looks for <input_dir>/_metadata.yaml."
+        ),
+    )
     args = parser.parse_args(argv)
 
     if not args.input_dir.is_dir():
         print(f"Input folder not found: {args.input_dir}", file=sys.stderr)
         return 2
 
-    n = process_folder(args.input_dir, args.output_dir, args.recursive)
+    n = process_folder(
+        args.input_dir,
+        args.output_dir,
+        args.recursive,
+        metadata_path=args.metadata,
+    )
     print(f"Processed {n} file(s) -> {args.output_dir}")
     print(f"  optimized/   {n} SQL files")
     print(f"  mapping/     {n*2} YAML files (BFM + CTE shapes)")

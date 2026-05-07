@@ -9,32 +9,32 @@ sources:
 outputs:
 - name: order_id
   from_sources:
-  - <inherited>.order_id
-  derivation: direct
+  - oms_orders_export.order_id
+  derivation: rename
 - name: customer_id
   from_sources:
-  - <inherited>.customer_id
-  derivation: direct
+  - oms_orders_export.customer_id
+  derivation: rename
 - name: order_date
   from_sources:
-  - <inherited>.order_date
-  derivation: direct
+  - oms_orders_export.order_date
+  derivation: rename
 - name: order_status
   from_sources:
-  - <inherited>.order_status
-  derivation: direct
+  - oms_orders_export.order_status
+  derivation: rename
 - name: total_amount
   from_sources:
-  - <inherited>.total_amount
-  derivation: direct
+  - oms_orders_export.total_amount
+  derivation: rename
 - name: currency
   from_sources:
-  - <inherited>.currency
-  derivation: direct
+  - oms_orders_export.currency
+  derivation: rename
 - name: source_system
   from_sources:
-  - <inherited>.source_system
-  derivation: direct
+  - oms_orders_export.source_system
+  derivation: rename
 contract:
   owner: <unknown>
   freshness_minutes: 60

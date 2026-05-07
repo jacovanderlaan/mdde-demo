@@ -9,32 +9,32 @@ sources:
 outputs:
 - name: customer_id
   from_sources:
-  - <inherited>.customer_id
-  derivation: direct
+  - crm_customers_export.customer_id
+  derivation: rename
 - name: first_name
   from_sources:
-  - <inherited>.first_name
-  derivation: direct
+  - crm_customers_export.first_name
+  derivation: rename
 - name: last_name
   from_sources:
-  - <inherited>.last_name
-  derivation: direct
+  - crm_customers_export.last_name
+  derivation: rename
 - name: email
   from_sources:
-  - <inherited>.email
-  derivation: direct
+  - crm_customers_export.email
+  derivation: rename
 - name: phone
   from_sources:
-  - <inherited>.phone
-  derivation: direct
+  - crm_customers_export.phone
+  derivation: rename
 - name: created_at
   from_sources:
-  - <inherited>.created_at
-  derivation: direct
+  - crm_customers_export.created_at
+  derivation: rename
 - name: source_system
   from_sources:
-  - <inherited>.source_system
-  derivation: direct
+  - crm_customers_export.source_system
+  derivation: rename
 contract:
   owner: <unknown>
   freshness_minutes: 60

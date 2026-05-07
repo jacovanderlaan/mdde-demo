@@ -90,14 +90,20 @@ dbutils.widgets.text("input_dir", f"{module_dir}/input", "Input folder (SQL file
 dbutils.widgets.text("output_dir", "/tmp/sql_process_output", "Output folder")
 dbutils.widgets.dropdown("recursive", "false", ["true", "false"],
                          "Recurse into subdirs")
+dbutils.widgets.text(
+    "metadata_path", "",
+    "Metadata YAML (optional, blank = auto-discover input/_metadata.yaml)",
+)
 
 input_dir = dbutils.widgets.get("input_dir")
 output_dir = dbutils.widgets.get("output_dir")
 recursive = dbutils.widgets.get("recursive") == "true"
+metadata_path = dbutils.widgets.get("metadata_path") or None
 
 print(f"Input:     {input_dir}")
 print(f"Output:    {output_dir}")
 print(f"Recursive: {recursive}")
+print(f"Metadata:  {metadata_path or '(auto-discover)'}")
 
 # COMMAND ----------
 
@@ -109,7 +115,12 @@ print(f"Recursive: {recursive}")
 from pathlib import Path
 from sql_process import process_folder
 
-n = process_folder(Path(input_dir), Path(output_dir), recursive=recursive)
+n = process_folder(
+    Path(input_dir),
+    Path(output_dir),
+    recursive=recursive,
+    metadata_path=Path(metadata_path) if metadata_path else None,
+)
 print(f"Processed {n} file(s) -> {output_dir}")
 
 # COMMAND ----------

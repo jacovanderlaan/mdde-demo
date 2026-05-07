@@ -34,6 +34,7 @@ notebook.
 | `_determinism.py` | Vendored determinism checker (no DuckDB). |
 | `sql_process_databricks.py` | Databricks notebook (source format). |
 | `input/` | 7 sample SQL files exercising the surface. |
+| `input/_metadata.yaml` | Optional source-table schema for the qualify pass. |
 | `expected_output/` | Snapshot of what the script produces from `input/`. |
 | `README.md` | This file. |
 
@@ -56,11 +57,14 @@ those two files into this folder and removing the `duckdb` /
 ```bash
 pip install sqlglot pyyaml
 
-# Top-level folder
+# Top-level folder. Auto-uses input/_metadata.yaml if present.
 python sql_process.py input/ --out output/
 
 # Recurse into subdirectories (preserves folder structure in output)
 python sql_process.py path/to/sql_corpus --out output/ --recursive
+
+# Override the metadata file (point at a shared schema YAML)
+python sql_process.py input/ --out output/ --metadata path/to/schemas.yaml
 ```
 
 Works from any current working directory — the script locates its
@@ -164,6 +168,81 @@ SELECT
     ROW_NUMBER() OVER ()    AS rn   -- @derived
 FROM ...
 ```
+
+---
+
+## Metadata input (optional, but recommended)
+
+The script accepts an optional metadata YAML file that describes
+the source-table schemas. When provided, it runs sqlglot's
+`qualify()` pass on every parsed file. That gives three concrete
+wins over the no-metadata path:
+
+1. **`SELECT *` is expanded** into the explicit column list, so the
+   mapping output for `SELECT * FROM joined` becomes a per-column
+   lineage record instead of a single `*` row.
+2. **Bare column references** like `email` or `total_amount` are
+   resolved to their owning table (`c.email`, `o.total_amount`),
+   so the `(table, column)` pairs in the mapping are accurate
+   rather than guessed from the closest alias.
+3. **Missing-column errors surface early** — a column referenced
+   in the SQL but absent from the metadata appears as a qualify
+   skip in `report.md`, pointing at the gap.
+
+### Format
+
+```yaml
+# input/_metadata.yaml
+sources:
+  landing.crm_customers_export:
+    customer_id: BIGINT
+    email: VARCHAR
+    name: VARCHAR
+  raw_customers:
+    customer_id: BIGINT
+    email: VARCHAR
+    name: VARCHAR
+```
+
+- Top-level key is `sources:`, mapping table name → column dict
+- Table names may be qualified (`catalog.db.table` or `db.table`)
+  or bare (`raw_customers`); the script normalises mixed depths
+  for sqlglot
+- Column types are dialect-agnostic — sqlglot uses them for name
+  resolution, not type validation. Whatever your team writes works.
+
+### How the script finds the file
+
+In order of precedence:
+
+1. Explicit `--metadata <path>` argument
+2. `<input_dir>/_metadata.yaml` if it exists
+3. No metadata; script runs without qualification
+
+When no metadata is found, the script still produces all output
+artefacts — they just have the limitations the previous section
+documents (`SELECT *` rows, less precise source column attribution).
+
+### Per-file fail-soft
+
+`qualify()` is opinionated. If two source tables both have
+`customer_id` and a SELECT references it bare, qualify refuses
+(genuinely ambiguous). When that happens for a single file:
+
+- The file's lineage extraction falls back to the unqualified AST
+- The reason appears in `report.md` under "Qualify skipped"
+- Other files keep being processed normally
+
+Reading `report.md`'s Qualify-skipped table is the fastest way to
+diagnose what's missing from the metadata file.
+
+### Where the metadata file should come from
+
+Three reasonable sources, in increasing rigour:
+
+- **Hand-authored** for a small input set — what `input/_metadata.yaml` does today
+- **Extracted from `INFORMATION_SCHEMA`** of your warehouse — a few lines of SQL
+- **Reuse this script's `annotations/*.entity.yaml` outputs** — run on the upstream files first, then assemble their entity YAMLs into a metadata file for the dependent files. (Auto-import of those entity YAMLs as input is on the roadmap; today it's a small manual step.)
 
 ---
 

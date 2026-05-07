@@ -6,50 +6,51 @@ source_entities:
 - landing.oms_orders_export
 attributes:
 - target: order_id
-  derivation: direct
-  expression: order_id /* @pk @business_key */
+  derivation: rename
+  expression: '"oms_orders_export"."order_id" /* @pk @business_key */ AS "order_id"'
   sources:
-  - entity: <inherited>
+  - entity: oms_orders_export
     attribute: order_id
   tags:
   - business_key
   - pk
 - target: customer_id
-  derivation: direct
-  expression: customer_id /* @fk(raw_customers.customer_id) */
+  derivation: rename
+  expression: '"oms_orders_export"."customer_id" /* @fk(raw_customers.customer_id)
+    */ AS "customer_id"'
   sources:
-  - entity: <inherited>
+  - entity: oms_orders_export
     attribute: customer_id
   tags:
   - fk
   fk: raw_customers.customer_id
 - target: order_date
-  derivation: direct
-  expression: order_date
+  derivation: rename
+  expression: '"oms_orders_export"."order_date" AS "order_date"'
   sources:
-  - entity: <inherited>
+  - entity: oms_orders_export
     attribute: order_date
 - target: order_status
-  derivation: direct
-  expression: order_status
+  derivation: rename
+  expression: '"oms_orders_export"."order_status" AS "order_status"'
   sources:
-  - entity: <inherited>
+  - entity: oms_orders_export
     attribute: order_status
 - target: total_amount
-  derivation: direct
-  expression: total_amount
+  derivation: rename
+  expression: '"oms_orders_export"."total_amount" AS "total_amount"'
   sources:
-  - entity: <inherited>
+  - entity: oms_orders_export
     attribute: total_amount
 - target: currency
-  derivation: direct
-  expression: currency
+  derivation: rename
+  expression: '"oms_orders_export"."currency" AS "currency"'
   sources:
-  - entity: <inherited>
+  - entity: oms_orders_export
     attribute: currency
 - target: source_system
-  derivation: direct
-  expression: source_system
+  derivation: rename
+  expression: '"oms_orders_export"."source_system" AS "source_system"'
   sources:
-  - entity: <inherited>
+  - entity: oms_orders_export
     attribute: source_system

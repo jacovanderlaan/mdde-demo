@@ -15,43 +15,43 @@ outputs:
 - name: customer_id
   from_sources:
   - rc.customer_id
-  derivation: direct
+  derivation: rename
 - name: email
   from_sources:
   - c.email
-  derivation: direct
+  derivation: rename
 - name: first_name
   from_sources:
   - c.first_name
-  derivation: direct
+  derivation: rename
 - name: last_name
   from_sources:
   - c.last_name
-  derivation: direct
+  derivation: rename
 - name: order_count
   from_sources:
   - rc.order_count
-  derivation: direct
+  derivation: rename
 - name: total_revenue
   from_sources:
   - rc.total_revenue
-  derivation: direct
+  derivation: rename
 - name: avg_orders_overall
   from_sources:
   - rc.avg_orders_overall
-  derivation: direct
+  derivation: rename
 - name: max_revenue_overall
   from_sources:
   - rc.max_revenue_overall
-  derivation: direct
+  derivation: rename
 - name: revenue_rank
   from_sources:
   - rc.revenue_rank
-  derivation: direct
+  derivation: rename
 - name: segment
   from_sources:
   - rc.segment
-  derivation: direct
+  derivation: rename
 contract:
   owner: <unknown>
   freshness_minutes: 60

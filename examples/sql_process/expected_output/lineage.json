@@ -263,10 +263,133 @@
           "name": "customer_revenue",
           "facets": {
             "schema": {
-              "fields": []
+              "fields": [
+                {
+                  "name": "customer_id",
+                  "type": "INFERRED"
+                },
+                {
+                  "name": "total_amount",
+                  "type": "INFERRED"
+                },
+                {
+                  "name": "rn",
+                  "type": "INFERRED"
+                },
+                {
+                  "name": "customer_id",
+                  "type": "INFERRED"
+                },
+                {
+                  "name": "first_name",
+                  "type": "INFERRED"
+                },
+                {
+                  "name": "last_name",
+                  "type": "INFERRED"
+                },
+                {
+                  "name": "email",
+                  "type": "INFERRED"
+                },
+                {
+                  "name": "phone",
+                  "type": "INFERRED"
+                },
+                {
+                  "name": "created_at",
+                  "type": "INFERRED"
+                },
+                {
+                  "name": "source_system",
+                  "type": "INFERRED"
+                }
+              ]
             },
             "columnLineage": {
-              "fields": {}
+              "fields": {
+                "customer_id": {
+                  "inputFields": [
+                    {
+                      "namespace": "mdde-demo.sql_process",
+                      "name": "joined",
+                      "field": "customer_id"
+                    }
+                  ]
+                },
+                "total_amount": {
+                  "inputFields": [
+                    {
+                      "namespace": "mdde-demo.sql_process",
+                      "name": "joined",
+                      "field": "total_amount"
+                    }
+                  ]
+                },
+                "rn": {
+                  "inputFields": [
+                    {
+                      "namespace": "mdde-demo.sql_process",
+                      "name": "joined",
+                      "field": "rn"
+                    }
+                  ]
+                },
+                "first_name": {
+                  "inputFields": [
+                    {
+                      "namespace": "mdde-demo.sql_process",
+                      "name": "joined",
+                      "field": "first_name"
+                    }
+                  ]
+                },
+                "last_name": {
+                  "inputFields": [
+                    {
+                      "namespace": "mdde-demo.sql_process",
+                      "name": "joined",
+                      "field": "last_name"
+                    }
+                  ]
+                },
+                "email": {
+                  "inputFields": [
+                    {
+                      "namespace": "mdde-demo.sql_process",
+                      "name": "joined",
+                      "field": "email"
+                    }
+                  ]
+                },
+                "phone": {
+                  "inputFields": [
+                    {
+                      "namespace": "mdde-demo.sql_process",
+                      "name": "joined",
+                      "field": "phone"
+                    }
+                  ]
+                },
+                "created_at": {
+                  "inputFields": [
+                    {
+                      "namespace": "mdde-demo.sql_process",
+                      "name": "joined",
+                      "field": "created_at"
+                    }
+                  ]
+                },
+                "source_system": {
+                  "inputFields": [
+                    {
+                      "namespace": "mdde-demo.sql_process",
+                      "name": "joined",
+                      "field": "source_system"
+                    }
+                  ]
+                }
+              }
             }
           }
         }
@@ -494,7 +617,7 @@
                   "inputFields": [
                     {
                       "namespace": "mdde-demo.sql_process",
-                      "name": "<inherited>",
+                      "name": "crm_customers_export",
                       "field": "customer_id"
                     }
                   ]
@@ -503,7 +626,7 @@
                   "inputFields": [
                     {
                       "namespace": "mdde-demo.sql_process",
-                      "name": "<inherited>",
+                      "name": "crm_customers_export",
                       "field": "first_name"
                     }
                   ]
@@ -512,7 +635,7 @@
                   "inputFields": [
                     {
                       "namespace": "mdde-demo.sql_process",
-                      "name": "<inherited>",
+                      "name": "crm_customers_export",
                       "field": "last_name"
                     }
                   ]
@@ -521,7 +644,7 @@
                   "inputFields": [
                     {
                       "namespace": "mdde-demo.sql_process",
-                      "name": "<inherited>",
+                      "name": "crm_customers_export",
                       "field": "email"
                     }
                   ]
@@ -530,7 +653,7 @@
                   "inputFields": [
                     {
                       "namespace": "mdde-demo.sql_process",
-                      "name": "<inherited>",
+                      "name": "crm_customers_export",
                       "field": "phone"
                     }
                   ]
@@ -539,7 +662,7 @@
                   "inputFields": [
                     {
                       "namespace": "mdde-demo.sql_process",
-                      "name": "<inherited>",
+                      "name": "crm_customers_export",
                       "field": "created_at"
                     }
                   ]
@@ -548,7 +671,7 @@
                   "inputFields": [
                     {
                       "namespace": "mdde-demo.sql_process",
-                      "name": "<inherited>",
+                      "name": "crm_customers_export",
                       "field": "source_system"
                     }
                   ]
@@ -616,7 +739,7 @@
                   "inputFields": [
                     {
                       "namespace": "mdde-demo.sql_process",
-                      "name": "<inherited>",
+                      "name": "oms_orders_export",
                       "field": "order_id"
                     }
                   ]
@@ -625,7 +748,7 @@
                   "inputFields": [
                     {
                       "namespace": "mdde-demo.sql_process",
-                      "name": "<inherited>",
+                      "name": "oms_orders_export",
                       "field": "customer_id"
                     }
                   ]
@@ -634,7 +757,7 @@
                   "inputFields": [
                     {
                       "namespace": "mdde-demo.sql_process",
-                      "name": "<inherited>",
+                      "name": "oms_orders_export",
                       "field": "order_date"
                     }
                   ]
@@ -643,7 +766,7 @@
                   "inputFields": [
                     {
                       "namespace": "mdde-demo.sql_process",
-                      "name": "<inherited>",
+                      "name": "oms_orders_export",
                       "field": "order_status"
                     }
                   ]
@@ -652,7 +775,7 @@
                   "inputFields": [
                     {
                       "namespace": "mdde-demo.sql_process",
-                      "name": "<inherited>",
+                      "name": "oms_orders_export",
                       "field": "total_amount"
                     }
                   ]
@@ -661,7 +784,7 @@
                   "inputFields": [
                     {
                       "namespace": "mdde-demo.sql_process",
-                      "name": "<inherited>",
+                      "name": "oms_orders_export",
                       "field": "currency"
                     }
                   ]
@@ -670,7 +793,7 @@
                   "inputFields": [
                     {
                       "namespace": "mdde-demo.sql_process",
-                      "name": "<inherited>",
+                      "name": "oms_orders_export",
                       "field": "source_system"
                     }
                   ]
@@ -738,7 +861,7 @@
                   "inputFields": [
                     {
                       "namespace": "mdde-demo.sql_process",
-                      "name": "<inherited>",
+                      "name": "raw_customers",
                       "field": "customer_id"
                     }
                   ]
@@ -747,7 +870,7 @@
                   "inputFields": [
                     {
                       "namespace": "mdde-demo.sql_process",
-                      "name": "<inherited>",
+                      "name": "raw_customers",
                       "field": "first_name"
                     }
                   ]
@@ -756,7 +879,7 @@
                   "inputFields": [
                     {
                       "namespace": "mdde-demo.sql_process",
-                      "name": "<inherited>",
+                      "name": "raw_customers",
                       "field": "last_name"
                     }
                   ]
@@ -765,7 +888,7 @@
                   "inputFields": [
                     {
                       "namespace": "mdde-demo.sql_process",
-                      "name": "<inherited>",
+                      "name": "raw_customers",
                       "field": "email"
                     }
                   ]
@@ -774,7 +897,7 @@
                   "inputFields": [
                     {
                       "namespace": "mdde-demo.sql_process",
-                      "name": "<inherited>",
+                      "name": "raw_customers",
                       "field": "phone"
                     }
                   ]
@@ -783,7 +906,7 @@
                   "inputFields": [
                     {
                       "namespace": "mdde-demo.sql_process",
-                      "name": "<inherited>",
+                      "name": "raw_customers",
                       "field": "created_at"
                     }
                   ]
@@ -792,7 +915,7 @@
                   "inputFields": [
                     {
                       "namespace": "mdde-demo.sql_process",
-                      "name": "<inherited>",
+                      "name": "raw_customers",
                       "field": "source_system"
                     }
                   ]

@@ -7,8 +7,8 @@ source_entities:
 - raw_orders
 attributes:
 - target: customer_id
-  derivation: direct
-  expression: c.customer_id /* @pk @business_key */
+  derivation: rename
+  expression: '"c"."customer_id" /* @pk @business_key */ AS "customer_id"'
   sources:
   - entity: c
     attribute: customer_id
@@ -16,33 +16,33 @@ attributes:
   - fk
   fk: stg_customers.customer_id
 - target: email
-  derivation: direct
-  expression: c.email /* @pii */
+  derivation: rename
+  expression: '"c"."email" /* @pii */ AS "email"'
   sources:
   - entity: c
     attribute: email
 - target: latest_order_id
   derivation: rename
-  expression: l.order_id AS latest_order_id /* @fk(raw_orders.order_id) */
+  expression: '"l"."order_id" AS "latest_order_id" /* @fk(raw_orders.order_id) */'
   sources:
   - entity: l
     attribute: order_id
 - target: latest_order_date
   derivation: rename
-  expression: l.order_date AS latest_order_date
+  expression: '"l"."order_date" AS "latest_order_date"'
   sources:
   - entity: l
     attribute: order_date
 - target: latest_order_amount
   derivation: rename
-  expression: l.total_amount AS latest_order_amount
+  expression: '"l"."total_amount" AS "latest_order_amount"'
   sources:
   - entity: l
     attribute: total_amount
 - target: days_since_last_order
   derivation: expression
-  expression: DATEDIFF(CURRENT_DATE, l.order_date) AS days_since_last_order /* @derived
-    */
+  expression: DATEDIFF(CURRENT_DATE, "l"."order_date") AS "days_since_last_order"
+    /* @derived */
   sources:
   - entity: l
     attribute: order_date

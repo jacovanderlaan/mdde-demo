@@ -5,4 +5,68 @@ description: Customer revenue rollup with several planted optimizer issues
 source_entities:
 - raw_orders
 - stg_customers
-attributes: []
+attributes:
+- target: customer_id
+  derivation: rename
+  expression: '"joined"."customer_id" AS "customer_id"'
+  sources:
+  - entity: joined
+    attribute: customer_id
+  tags:
+  - pk
+- target: total_amount
+  derivation: rename
+  expression: '"joined"."total_amount" AS "total_amount"'
+  sources:
+  - entity: joined
+    attribute: total_amount
+- target: rn
+  derivation: rename
+  expression: '"joined"."rn" AS "rn"'
+  sources:
+  - entity: joined
+    attribute: rn
+- target: customer_id
+  derivation: rename
+  expression: '"joined"."customer_id" AS "customer_id"'
+  sources:
+  - entity: joined
+    attribute: customer_id
+  tags:
+  - pk
+- target: first_name
+  derivation: rename
+  expression: '"joined"."first_name" AS "first_name"'
+  sources:
+  - entity: joined
+    attribute: first_name
+- target: last_name
+  derivation: rename
+  expression: '"joined"."last_name" AS "last_name"'
+  sources:
+  - entity: joined
+    attribute: last_name
+- target: email
+  derivation: rename
+  expression: '"joined"."email" AS "email"'
+  sources:
+  - entity: joined
+    attribute: email
+- target: phone
+  derivation: rename
+  expression: '"joined"."phone" AS "phone"'
+  sources:
+  - entity: joined
+    attribute: phone
+- target: created_at
+  derivation: rename
+  expression: '"joined"."created_at" AS "created_at"'
+  sources:
+  - entity: joined
+    attribute: created_at
+- target: source_system
+  derivation: rename
+  expression: '"joined"."source_system" AS "source_system"'
+  sources:
+  - entity: joined
+    attribute: source_system
