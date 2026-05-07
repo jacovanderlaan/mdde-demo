@@ -1,0 +1,25 @@
+version: 2
+models:
+- name: int_customer_master
+  description: Model int_customer_master
+  columns:
+  - name: customer_id
+    description: Column customer_id
+  - name: first_name
+    description: Column first_name
+  - name: last_name
+    description: Column last_name
+  - name: full_name
+    description: Column full_name
+  - name: email
+    description: Column email
+  - name: phone
+    description: Column phone
+  - name: onboarding_date
+    description: Column onboarding_date
+  - name: customer_tenure_segment
+    description: Column customer_tenure_segment
+  - name: source_system
+    description: Column source_system
+  - name: _ingested_at
+    description: Column _ingested_at

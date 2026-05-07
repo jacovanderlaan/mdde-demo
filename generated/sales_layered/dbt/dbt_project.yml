@@ -1,0 +1,33 @@
+name: sales_layered_demo
+version: 1.0.0
+config-version: 2
+profile: sales_layered_demo
+model-paths:
+- models
+analysis-paths:
+- analyses
+test-paths:
+- tests
+seed-paths:
+- seeds
+macro-paths:
+- macros
+snapshot-paths:
+- snapshots
+clean-targets:
+- target
+- dbt_packages
+models:
+  sales_layered_demo:
+    staging:
+      +materialized: view
+      +tags:
+      - staging
+    integration:
+      +materialized: table
+      +tags:
+      - integration
+    business:
+      +materialized: table
+      +tags:
+      - business

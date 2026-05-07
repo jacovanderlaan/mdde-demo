@@ -469,9 +469,24 @@ See [models/regulatory/](models/regulatory/) for complete models.
 | YAML models | Entity definitions | "From ERDs to Executable Metadata" |
 | ADRs | Decision documentation | N/A |
 
+## How This Demo Fits the Wider Framework
+
+MDDE comes in three connected tiers. This repository is the educational edition — the middle tier.
+
+| Tier | Where it lives | What it gives you |
+|------|----------------|-------------------|
+| **Framework core** | [`mdde`](https://github.com/jacovanderlaan/mdde) (open source) | The runnable tool — full parser, generator, validators, exporters |
+| **Educational edition** | `mdde-demo` (this repository, open source) | Minimal runnable examples + ADRs — start here to learn the concepts |
+| **Professional services** | Consilium / MDDE Professional Services (private) | Workshops, industry accelerators (BCBS 239, AnaCredit, HIPAA), implementation methodology, enterprise support |
+
+**How to use the tiers together:**
+1. Read this demo's README and run the examples to understand the concepts
+2. Move to the [`mdde`](https://github.com/jacovanderlaan/mdde) framework core when you need the full toolset
+3. Engage Consilium / MDDE Professional Services for adoption, accelerators, or enterprise rollouts
+
 ## What Remains Private
 
-The full MDDE framework includes features not in this demo:
+The full framework and the professional-services tier include features not in this educational edition:
 
 - Advanced UNION handling and dialect rendering
 - Complete 60+ table metadata schema
@@ -479,14 +494,18 @@ The full MDDE framework includes features not in this demo:
 - GenAI-powered modeling assistance
 - BEAM integration and enterprise imports
 - Migration tooling
+- Industry accelerators (BCBS 239, AnaCredit, HIPAA, retail customer-360)
+- Workshop curricula and adoption playbooks
 
 ## Want the Full Framework?
 
-This educational edition demonstrates the concepts. For the full MDDE framework:
+This educational edition demonstrates the concepts. For more:
 
-- **Workshops** - Hands-on training sessions
-- **Consulting** - Implementation in your organization
-- **Enterprise License** - Full framework access
+- **Open-source framework core** — see [`mdde`](https://github.com/jacovanderlaan/mdde)
+- **Workshops** — Hands-on training sessions (MDDE Fundamentals, Temporal Modeling, Migration Planning, AI Governance)
+- **Consulting** — Implementation in your organization
+- **Industry accelerators** — Financial services (BCBS 239, AnaCredit, BIRD), healthcare (HIPAA), retail
+- **Enterprise license** — Full framework access
 
 Contact: [jacovanderlaan on LinkedIn](https://linkedin.com/in/jacovanderlaan)
 

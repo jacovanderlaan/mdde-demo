@@ -1,0 +1,26 @@
+version: 2
+sources:
+- name: raw
+  description: Raw source data
+  tables:
+  - name: raw_customers
+    description: Source table raw_customers
+    columns:
+    - name: customer_id
+      description: Column customer_id
+    - name: first_name
+      description: Column first_name
+    - name: last_name
+      description: Column last_name
+    - name: email
+      description: Column email
+    - name: phone
+      description: Column phone
+    - name: created_at
+      description: Column created_at
+    - name: updated_at
+      description: Column updated_at
+    - name: source_system
+      description: Column source_system
+    - name: _ingested_at
+      description: Column _ingested_at

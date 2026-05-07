@@ -29,3 +29,9 @@ Thumbs.db
 workspace/dbt/
 workspace/docs/
 generated/
+
+# Demo run artefacts (regenerable)
+mdde_lite.duckdb
+test_output/
+
+generated/sales_layered/metadata.duckdb

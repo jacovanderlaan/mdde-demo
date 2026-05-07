@@ -122,16 +122,16 @@ erDiagram
 
     dim_customer {
         bigint customer_sk PK
-        string customer_id BK
+        string customer_id
         string customer_name
         string segment
-        timestamp _valid_from
-        timestamp _valid_to
+        timestamp valid_from
+        timestamp valid_to
     }
 
     dim_account {
         bigint account_sk PK
-        string account_id BK
+        string account_id
         bigint customer_sk FK
         string status
         string product_category
@@ -139,14 +139,14 @@ erDiagram
 
     dim_product {
         bigint product_sk PK
-        string product_code BK
+        string product_code
         string product_name
         string product_category
     }
 
     fact_transaction {
         bigint transaction_sk PK
-        string transaction_id BK
+        string transaction_id
         bigint account_sk FK
         bigint customer_sk FK
         int transaction_date_sk FK
@@ -155,8 +155,8 @@ erDiagram
     }
 
     fact_balance {
-        bigint account_sk PK,FK
-        int balance_date_sk PK,FK
+        bigint account_sk PK
+        int balance_date_sk FK
         decimal balance_closing
         int transaction_count
     }

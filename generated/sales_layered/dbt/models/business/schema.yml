@@ -1,0 +1,52 @@
+version: 2
+models:
+- name: dim_customer
+  description: Model dim_customer
+  columns:
+  - name: customer_sk
+    description: Column customer_sk
+  - name: customer_id
+    description: Column customer_id
+  - name: full_name
+    description: Column full_name
+  - name: email
+    description: Column email
+  - name: phone
+    description: Column phone
+  - name: onboarding_date
+    description: Column onboarding_date
+  - name: customer_tenure_segment
+    description: Column customer_tenure_segment
+  - name: source_system
+    description: Column source_system
+  - name: _valid_from
+    description: Column _valid_from
+  - name: _valid_to
+    description: Column _valid_to
+  - name: _is_current
+    description: Column _is_current
+- name: fact_orders
+  description: Model fact_orders
+  columns:
+  - name: order_id
+    description: Column order_id
+  - name: order_line_id
+    description: Column order_line_id
+  - name: customer_sk
+    description: Column customer_sk
+  - name: product_id
+    description: Column product_id
+  - name: order_date
+    description: Column order_date
+  - name: quantity
+    description: Column quantity
+  - name: unit_price
+    description: Column unit_price
+  - name: line_amount
+    description: Column line_amount
+  - name: currency_code
+    description: Column currency_code
+  - name: order_status
+    description: Column order_status
+  - name: _ingested_at
+    description: Column _ingested_at

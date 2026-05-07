@@ -76,7 +76,11 @@ def generate_erd(conn: duckdb.DuckDBPyConnection, title: str = "Entity Relations
             # Format: type name PK/FK "comment"
             type_str = _simplify_type(data_type) if data_type else "string"
             pk_str = " PK" if is_pk else ""
-            lines.append(f"        {type_str} {attr_name}{pk_str}")
+            # Mermaid erDiagram attribute names must start with a letter,
+            # not an underscore. Strip leading underscores (common in
+            # SCD2/audit columns like _valid_from, _ingested_at).
+            safe_attr = attr_name.lstrip("_") or attr_name
+            lines.append(f"        {type_str} {safe_attr}{pk_str}")
 
         lines.append("    }")
 
