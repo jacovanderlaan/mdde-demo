@@ -65,6 +65,9 @@ python sql_process.py path/to/sql_corpus --out output/ --recursive
 
 # Override the metadata file (point at a shared schema YAML)
 python sql_process.py input/ --out output/ --metadata path/to/schemas.yaml
+
+# Diff mode — compare current run against a previous snapshot
+python sql_process.py input/ --out output/ --diff path/to/previous_output/
 ```
 
 Works from any current working directory — the script locates its
@@ -125,8 +128,9 @@ output/
 │   └── <filename>.cte.yaml
 ├── annotations/
 │   └── <filename>.entity.yaml
-├── lineage.json        # OpenLineage events, one per processed file
-└── report.md           # run summary
+├── lineage.json        # OpenLineage events + cross-file stitching block
+├── report.md           # run summary (incl. cross-file Mermaid graph)
+└── diff.md             # only when --diff is passed; summary vs previous run
 ```
 
 In `--recursive` mode, the same subfolder structure is preserved
@@ -300,6 +304,54 @@ Nine cross-file edges across seven files, plus two external sources.
   reading the entity column in `report.md`'s file table.
 - **Recursive references** are not specially handled — a file
   reading itself is silently skipped.
+
+---
+
+## Diff mode
+
+Re-run the script on a folder you've processed before and compare
+against the previous snapshot:
+
+```bash
+# First run
+python sql_process.py input/ --out v1_output/
+
+# ...analyst tweaks SQL files...
+
+# Second run, diffing against v1
+python sql_process.py input/ --out v2_output/ --diff v1_output/
+```
+
+`v2_output/diff.md` summarises what changed between the two runs:
+
+- **Optimised SQL** — added/removed/modified files
+- **Mapping (BFM)** — per-target column changes (added/removed/derivation flip/source-set change)
+- **Cross-file stitching** — added/removed producer→consumer edges
+
+Sample output:
+
+```
+## Mapping (BFM)
+
+**Modified mappings:**
+
+### `customer_revenue.bfm.yaml`
+
+- + added column `revenue_per_order`
+
+## Cross-file stitching
+
+_No changes._
+```
+
+The mode is **report-only**: it tells you what changed; it doesn't
+generate patches or attempt to "apply" a diff. Pair with Git for
+full history (commit each output snapshot, then `git diff` between
+revisions does the same job at file level — diff mode is the
+domain-aware view on top).
+
+When the previous-output folder doesn't exist, `diff.md` says so
+and the run continues normally.
 
 ---
 

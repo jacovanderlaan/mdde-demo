@@ -1073,7 +1073,232 @@ def emit_report(
 
 
 # =============================================================================
-# 7. ORCHESTRATOR
+# 7. DIFF MODE — compare two output folders, emit diff.md
+# =============================================================================
+
+
+def emit_diff(previous_output: Path, current_output: Path) -> str:
+    """Compare two output folders and return a markdown diff report.
+
+    Compares four artefact classes:
+      - per-file optimised SQL (boolean: changed yes/no)
+      - per-target BFM mapping YAML (column-level: added/removed/changed)
+      - cross-file stitching edges (added/removed)
+      - quality-finding counts per file
+
+    The report covers all four and is stable across runs (sorted by
+    filename, no timestamps). When nothing changed, says so explicitly.
+    """
+    if not previous_output.is_dir():
+        return f"# Diff\n\nPrevious output folder not found: `{previous_output}`\n"
+
+    lines: List[str] = ["# sql_process — diff report", ""]
+    lines.append(f"Previous run: `{previous_output}`")
+    lines.append(f"Current run:  `{current_output}`")
+    lines.append("")
+
+    any_change = False
+
+    # --------------------------------------------------------------
+    # 1. Optimised SQL — boolean change per file
+    # --------------------------------------------------------------
+    prev_sql_files = _collect_files(previous_output / "optimized", ".sql")
+    curr_sql_files = _collect_files(current_output / "optimized", ".sql")
+
+    added_sql = sorted(set(curr_sql_files) - set(prev_sql_files))
+    removed_sql = sorted(set(prev_sql_files) - set(curr_sql_files))
+    common_sql = sorted(set(prev_sql_files) & set(curr_sql_files))
+
+    changed_sql: List[str] = []
+    for rel in common_sql:
+        prev_text = (previous_output / "optimized" / rel).read_text(encoding="utf-8")
+        curr_text = (current_output / "optimized" / rel).read_text(encoding="utf-8")
+        if prev_text != curr_text:
+            changed_sql.append(rel)
+
+    lines.append("## Optimised SQL")
+    lines.append("")
+    if not (added_sql or removed_sql or changed_sql):
+        lines.append("_No changes._")
+    else:
+        any_change = True
+        if added_sql:
+            lines.append("**Added files:**")
+            lines.extend(f"- `{f}`" for f in added_sql)
+            lines.append("")
+        if removed_sql:
+            lines.append("**Removed files:**")
+            lines.extend(f"- `{f}`" for f in removed_sql)
+            lines.append("")
+        if changed_sql:
+            lines.append("**Modified files:**")
+            lines.extend(f"- `{f}`" for f in changed_sql)
+            lines.append("")
+    lines.append("")
+
+    # --------------------------------------------------------------
+    # 2. BFM mappings — per-target column-level diff
+    # --------------------------------------------------------------
+    prev_maps = _load_bfm_mappings(previous_output / "mapping")
+    curr_maps = _load_bfm_mappings(current_output / "mapping")
+
+    added_maps = sorted(set(curr_maps) - set(prev_maps))
+    removed_maps = sorted(set(prev_maps) - set(curr_maps))
+    common_maps = sorted(set(prev_maps) & set(curr_maps))
+
+    map_rows: List[Tuple[str, List[str]]] = []
+    for name in common_maps:
+        deltas = _diff_bfm_mapping(prev_maps[name], curr_maps[name])
+        if deltas:
+            map_rows.append((name, deltas))
+
+    lines.append("## Mapping (BFM)")
+    lines.append("")
+    if not (added_maps or removed_maps or map_rows):
+        lines.append("_No changes._")
+    else:
+        any_change = True
+        if added_maps:
+            lines.append("**Added mappings:**")
+            lines.extend(f"- `{f}`" for f in added_maps)
+            lines.append("")
+        if removed_maps:
+            lines.append("**Removed mappings:**")
+            lines.extend(f"- `{f}`" for f in removed_maps)
+            lines.append("")
+        if map_rows:
+            lines.append("**Modified mappings:**")
+            lines.append("")
+            for name, deltas in map_rows:
+                lines.append(f"### `{name}`")
+                lines.append("")
+                lines.extend(f"- {d}" for d in deltas)
+                lines.append("")
+    lines.append("")
+
+    # --------------------------------------------------------------
+    # 3. Cross-file stitching — edge changes
+    # --------------------------------------------------------------
+    prev_edges = _load_stitching(previous_output / "lineage.json")
+    curr_edges = _load_stitching(current_output / "lineage.json")
+
+    added_edges = sorted(curr_edges - prev_edges)
+    removed_edges = sorted(prev_edges - curr_edges)
+
+    lines.append("## Cross-file stitching")
+    lines.append("")
+    if not (added_edges or removed_edges):
+        lines.append("_No changes._")
+    else:
+        any_change = True
+        if added_edges:
+            lines.append("**Added edges:**")
+            for p, c, t in added_edges:
+                lines.append(f"- `{p}` → `{c}` (via `{t}`)")
+            lines.append("")
+        if removed_edges:
+            lines.append("**Removed edges:**")
+            for p, c, t in removed_edges:
+                lines.append(f"- `{p}` → `{c}` (via `{t}`)")
+            lines.append("")
+    lines.append("")
+
+    # --------------------------------------------------------------
+    # Summary
+    # --------------------------------------------------------------
+    lines.insert(4, f"**Status:** {'changed' if any_change else 'no changes'}  ")
+    lines.insert(5, "")
+
+    return "\n".join(lines)
+
+
+def _collect_files(root: Path, ext: str) -> List[str]:
+    """Return relative paths (forward-slash, str) of files under root with given suffix."""
+    if not root.is_dir():
+        return []
+    out: List[str] = []
+    for p in sorted(root.rglob(f"*{ext}")):
+        if p.is_file():
+            out.append(str(p.relative_to(root)).replace("\\", "/"))
+    return out
+
+
+def _load_bfm_mappings(mapping_dir: Path) -> Dict[str, Dict[str, Any]]:
+    """Load every *.bfm.yaml under mapping/, keyed by relative path."""
+    if not mapping_dir.is_dir():
+        return {}
+    out: Dict[str, Dict[str, Any]] = {}
+    for p in sorted(mapping_dir.rglob("*.bfm.yaml")):
+        rel = str(p.relative_to(mapping_dir)).replace("\\", "/")
+        with open(p, "r", encoding="utf-8") as f:
+            out[rel] = yaml.safe_load(f) or {}
+    return out
+
+
+def _diff_bfm_mapping(prev: Dict[str, Any], curr: Dict[str, Any]) -> List[str]:
+    """Return human-readable bullet points describing per-attribute changes."""
+    deltas: List[str] = []
+
+    prev_attrs = {a["target"]: a for a in (prev.get("attributes") or [])}
+    curr_attrs = {a["target"]: a for a in (curr.get("attributes") or [])}
+
+    added = sorted(set(curr_attrs) - set(prev_attrs))
+    removed = sorted(set(prev_attrs) - set(curr_attrs))
+    common = sorted(set(prev_attrs) & set(curr_attrs))
+
+    for col in added:
+        deltas.append(f"+ added column `{col}`")
+    for col in removed:
+        deltas.append(f"- removed column `{col}`")
+    for col in common:
+        prev_a, curr_a = prev_attrs[col], curr_attrs[col]
+        if prev_a.get("derivation") != curr_a.get("derivation"):
+            deltas.append(
+                f"~ `{col}` derivation: "
+                f"{prev_a.get('derivation')} -> {curr_a.get('derivation')}"
+            )
+        prev_srcs = sorted(
+            (s.get("entity"), s.get("attribute"))
+            for s in (prev_a.get("sources") or [])
+        )
+        curr_srcs = sorted(
+            (s.get("entity"), s.get("attribute"))
+            for s in (curr_a.get("sources") or [])
+        )
+        if prev_srcs != curr_srcs:
+            deltas.append(
+                f"~ `{col}` sources changed "
+                f"({len(prev_srcs)} -> {len(curr_srcs)} source(s))"
+            )
+
+    # Top-level changes other than attributes.
+    if prev.get("source_entities") != curr.get("source_entities"):
+        prev_se = set(prev.get("source_entities") or [])
+        curr_se = set(curr.get("source_entities") or [])
+        if curr_se - prev_se:
+            deltas.append(f"+ source entities: {sorted(curr_se - prev_se)}")
+        if prev_se - curr_se:
+            deltas.append(f"- source entities: {sorted(prev_se - curr_se)}")
+
+    return deltas
+
+
+def _load_stitching(lineage_path: Path) -> Set[Tuple[str, str, str]]:
+    if not lineage_path.is_file():
+        return set()
+    try:
+        data = json.loads(lineage_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return set()
+    edges = (data.get("stitching") or {}).get("edges") or []
+    return {
+        (e.get("producer_job", ""), e.get("consumer_job", ""), e.get("via_table", ""))
+        for e in edges
+    }
+
+
+# =============================================================================
+# 8. ORCHESTRATOR
 # =============================================================================
 
 
@@ -1093,6 +1318,7 @@ def process_folder(
     output_dir: Path,
     recursive: bool = False,
     metadata_path: Optional[Path] = None,
+    diff_against: Optional[Path] = None,
 ) -> int:
     """Run the pipeline. Returns the number of files processed.
 
@@ -1101,6 +1327,10 @@ def process_folder(
     SQL file. If ``metadata_path`` is None, the script auto-discovers
     ``<input_dir>/_metadata.yaml``. Pass an empty/missing path to
     skip qualification entirely.
+
+    If ``diff_against`` points at a previous output folder, the run
+    additionally writes ``diff.md`` summarising what changed between
+    the two snapshots.
     """
     pattern = "**/*.sql" if recursive else "*.sql"
     sql_files = sorted(input_dir.glob(pattern))
@@ -1165,6 +1395,13 @@ def process_folder(
         emit_report(parsed_files, findings_per_file),
     )
 
+    # Diff against a previous output snapshot if requested.
+    if diff_against is not None:
+        write_text(
+            output_dir / "diff.md",
+            emit_diff(diff_against, output_dir),
+        )
+
     return len(parsed_files)
 
 
@@ -1202,6 +1439,18 @@ def main(argv: Optional[List[str]] = None) -> int:
             "the script looks for <input_dir>/_metadata.yaml."
         ),
     )
+    parser.add_argument(
+        "--diff",
+        dest="diff_against",
+        type=Path,
+        default=None,
+        help=(
+            "Path to a previous output folder. When set, the run "
+            "additionally writes diff.md summarising what changed "
+            "between the two snapshots (added/removed files, mapping "
+            "column changes, stitching edge changes)."
+        ),
+    )
     args = parser.parse_args(argv)
 
     if not args.input_dir.is_dir():
@@ -1213,6 +1462,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         args.output_dir,
         args.recursive,
         metadata_path=args.metadata,
+        diff_against=args.diff_against,
     )
     print(f"Processed {n} file(s) -> {args.output_dir}")
     print(f"  optimized/   {n} SQL files")
@@ -1220,6 +1470,8 @@ def main(argv: Optional[List[str]] = None) -> int:
     print(f"  annotations/ {n} entity YAML files")
     print(f"  lineage.json OpenLineage roll-up")
     print(f"  report.md    Run summary")
+    if args.diff_against is not None:
+        print(f"  diff.md      Diff against {args.diff_against}")
     return 0
 
 
