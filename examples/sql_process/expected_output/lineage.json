@@ -926,5 +926,56 @@
         }
       ]
     }
-  ]
+  ],
+  "stitching": {
+    "edges": [
+      {
+        "producer_job": "stg_customers",
+        "consumer_job": "customer_latest_orders",
+        "via_table": "stg_customers"
+      },
+      {
+        "producer_job": "raw_orders",
+        "consumer_job": "customer_latest_orders",
+        "via_table": "raw_orders"
+      },
+      {
+        "producer_job": "stg_customers",
+        "consumer_job": "customer_revenue_clean",
+        "via_table": "stg_customers"
+      },
+      {
+        "producer_job": "raw_orders",
+        "consumer_job": "customer_revenue_clean",
+        "via_table": "raw_orders"
+      },
+      {
+        "producer_job": "raw_orders",
+        "consumer_job": "customer_revenue",
+        "via_table": "raw_orders"
+      },
+      {
+        "producer_job": "stg_customers",
+        "consumer_job": "customer_revenue",
+        "via_table": "stg_customers"
+      },
+      {
+        "producer_job": "stg_customers",
+        "consumer_job": "customer_segment_analytics",
+        "via_table": "stg_customers"
+      },
+      {
+        "producer_job": "raw_orders",
+        "consumer_job": "customer_segment_analytics",
+        "via_table": "raw_orders"
+      },
+      {
+        "producer_job": "raw_customers",
+        "consumer_job": "stg_customers",
+        "via_table": "raw_customers"
+      }
+    ],
+    "namespace": "mdde-demo.sql_process",
+    "edge_count": 9
+  }
 }

@@ -246,6 +246,63 @@ Three reasonable sources, in increasing rigour:
 
 ---
 
+## Cross-file lineage stitching
+
+When one file in the input set produces an entity that another file
+reads, the script automatically records a producer→consumer edge.
+Concretely: if file A has `@mdde-entity: stg_customers` (or simply
+`CREATE VIEW stg_customers`) and file B contains
+`FROM stg_customers`, the script adds an edge `A → B` to the run.
+
+The stitching surfaces in two places:
+
+1. **`lineage.json`** gets a new `stitching` block with an edge
+   list — downstream OpenLineage consumers can pre-link the
+   per-file events without inferring connections themselves.
+2. **`report.md`** gains a "Cross-file lineage" section with an
+   edge table plus a Mermaid flowchart grouping nodes by layer
+   (`source` → `staging` → `integration` → `business`) and
+   showing external sources hanging off the upstream layer.
+
+The matching logic uses **entity name** as the join key. A file's
+`@mdde-entity` annotation (or the SQL filename if no annotation is
+present) becomes its produced-table identifier. The `entity_name`
+appears both as the OpenLineage `outputs.name` for that file and is
+matched against every other file's `source_tables` list.
+
+In the sample input set, the chain is:
+
+```
+landing.crm_customers_export  -> raw_customers
+                                  └-> stg_customers
+                                       ├-> customer_revenue (clean)
+                                       ├-> customer_revenue (bad)
+                                       ├-> customer_segment_analytics
+                                       └-> customer_latest_orders
+landing.oms_orders_export    -> raw_orders
+                                  ├-> customer_revenue (clean / bad)
+                                  ├-> customer_segment_analytics
+                                  └-> customer_latest_orders
+```
+
+Nine cross-file edges across seven files, plus two external sources.
+
+### Limits of the matcher
+
+- **Bare-name matching only.** A file declaring entity
+  `customer_revenue_clean` is matched against a `FROM
+  customer_revenue_clean` reference. Schema-qualified writes
+  (`gold.customer_revenue_clean`) are normalised to their last
+  segment so they match the entity name.
+- **Duplicate entity names** across files (rare; usually a
+  copy-paste bug) cause the later file to win as the producer.
+  The earlier file becomes orphaned in the graph. Surface this by
+  reading the entity column in `report.md`'s file table.
+- **Recursive references** are not specially handled — a file
+  reading itself is silently skipped.
+
+---
+
 ## Quality checks (re-using `mdde_lite/optimizer.py`)
 
 The 20 checks already shipped in the educational edition fire on
@@ -375,16 +432,23 @@ emitter will pick it up automatically.
 
 ## Limitations (honest)
 
-- `SELECT *` projections produce empty mappings. Solving this needs a
-  schema resolver (which CTE/source the `*` expands from), out of
-  scope for the lite edition.
-- Lineage stops at the file boundary. Cross-file lineage (e.g.
-  `customer_revenue` joins `stg_customers` joins `raw_customers`)
-  appears as separate OpenLineage events, not stitched.
 - Annotations are extracted lexically from comments. A column
   declared without an annotation is silent — there's no inference.
 - Auto-fix set is small on purpose. The script flags rather than
   rewrites whenever an engine could behave differently.
+
+**Closed earlier:**
+
+- `SELECT *` projections used to produce empty mappings. The
+  `--metadata` schema input + sqlglot's `qualify()` pass solve
+  this — `*` is expanded into the explicit column list before
+  lineage extraction runs.
+- Lineage used to stop at the file boundary. The script now
+  builds a cross-file graph: when one file's source matches
+  another's entity name, an edge is recorded in `lineage.json`
+  under `stitching.edges` and rendered as a Mermaid diagram in
+  `report.md`. Multi-hop chains (raw → staging → business) are
+  visible end-to-end.
 
 For deeper coverage, use the full MDDE framework's parser/optimiser
 chain (DuckDB-backed, ADR-094 onward).

@@ -59,6 +59,54 @@ Files processed: **7**
 
 **54/54** output columns have a resolved source attribute (100%)
 
+## Cross-file lineage
+
+**9** producer-consumer edge(s) stitched across the file set.
+
+| Producer | Consumer | Via table |
+|---|---|---|
+| `raw_customers.sql` | `stg_customers.sql` | `raw_customers` |
+| `raw_orders.sql` | `customer_latest_orders.sql` | `raw_orders` |
+| `raw_orders.sql` | `customer_revenue.sql` | `raw_orders` |
+| `raw_orders.sql` | `customer_revenue_bad.sql` | `raw_orders` |
+| `raw_orders.sql` | `customer_segment_analytics.sql` | `raw_orders` |
+| `stg_customers.sql` | `customer_latest_orders.sql` | `stg_customers` |
+| `stg_customers.sql` | `customer_revenue.sql` | `stg_customers` |
+| `stg_customers.sql` | `customer_revenue_bad.sql` | `stg_customers` |
+| `stg_customers.sql` | `customer_segment_analytics.sql` | `stg_customers` |
+
+```mermaid
+flowchart LR
+  subgraph source
+    raw_customers["raw_customers<br/><i>raw_customers.sql</i>"]
+    raw_orders["raw_orders<br/><i>raw_orders.sql</i>"]
+  end
+  subgraph staging
+    stg_customers["stg_customers<br/><i>stg_customers.sql</i>"]
+  end
+  subgraph business
+    customer_latest_orders["customer_latest_orders<br/><i>customer_latest_orders.sql</i>"]
+    customer_revenue_clean["customer_revenue_clean<br/><i>customer_revenue.sql</i>"]
+    customer_revenue["customer_revenue<br/><i>customer_revenue_bad.sql</i>"]
+    customer_segment_analytics["customer_segment_analytics<br/><i>customer_segment_analytics.sql</i>"]
+  end
+  raw_customers --> stg_customers
+  raw_orders --> customer_latest_orders
+  raw_orders --> customer_revenue_clean
+  raw_orders --> customer_revenue
+  raw_orders --> customer_segment_analytics
+  stg_customers --> customer_latest_orders
+  stg_customers --> customer_revenue_clean
+  stg_customers --> customer_revenue
+  stg_customers --> customer_segment_analytics
+  subgraph external ["external sources"]
+    ext_landing_crm_customers_export[("landing.crm_customers_export")]
+    ext_landing_oms_orders_export[("landing.oms_orders_export")]
+  end
+  ext_landing_crm_customers_export --> raw_customers
+  ext_landing_oms_orders_export --> raw_orders
+```
+
 ## SQL-First annotations
 
 | File | Entity | Annotated columns | Tags found |

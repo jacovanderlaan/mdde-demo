@@ -36,44 +36,57 @@ python -m src.mdde_lite.optimizer examples/sales
 python -m src.mdde_lite.generator
 ```
 
+## Examples
+
+The `examples/` folder contains four runnable demos, each focused on
+a different angle of metadata-driven engineering. Pick the one that
+matches what you want to explore:
+
+| Folder | What it demonstrates | Best for |
+|---|---|---|
+| [`examples/sales/`](examples/sales/) | Raw SQL files that exercise the 20-check optimiser (planted anti-patterns, determinism issues) | First-time exposure to the optimiser rules |
+| [`examples/erwin-replacement/`](examples/erwin-replacement/) | YAML-first modeling in VSCode → multi-dialect DDL generation. Replaces erwin / PowerDesigner workflows | Data architects evaluating modeling-tool alternatives |
+| [`examples/sales_layered/`](examples/sales_layered/) | Layered SQL pipeline (raw → staging → integration → business) → metadata DB → dbt project, ERD, dataflow | Engineers seeing the full source-to-target metadata chain |
+| [`examples/sql_process/`](examples/sql_process/) | **Standalone, no-DuckDB script: folder of SQL → optimised SQL + per-file mapping YAML + OpenLineage roll-up. Runs locally or in a Databricks notebook.** | Anyone with a folder of legacy SQL who wants instant mapping metadata |
+
+Each example folder has its own README with usage instructions.
+
 ## Repository Structure
 
 ```
 mdde-demo/
-├── src/mdde_lite/           # MDDE Lite Python package
-│   ├── schema.py            # Minimal metadata schema (5 tables)
-│   ├── parser.py            # SQL parser using sqlglot
-│   ├── optimizer.py         # SQL quality checks (20 checks)
-│   ├── generator.py         # SQL regenerator
-│   ├── diagrams.py          # Mermaid diagram generation
-│   ├── lineage.py           # Column-level lineage extraction
-│   ├── determinism.py       # Non-deterministic SQL detection
-│   ├── dbt_generator.py     # Generate dbt models from metadata
-│   ├── temporal.py          # SCD2 pattern detection and generation
-│   ├── documenter.py        # Markdown documentation generation
-│   ├── cte_normalizer.py    # CTE extraction and SQL modularization
-│   ├── glossary.py          # Business glossary management
-│   ├── datavault.py         # Data Vault pattern detection
-│   └── dimensional.py       # Dimensional model generation
+├── src/mdde_lite/                  # MDDE Lite Python package (14 modules)
+│   ├── schema.py                   # Minimal metadata schema (5 tables, DuckDB)
+│   ├── parser.py                   # SQL parser using sqlglot
+│   ├── optimizer.py                # SQL quality checks (20 checks)
+│   ├── determinism.py              # Non-deterministic SQL detection
+│   ├── lineage.py                  # Column-level lineage extraction
+│   ├── diagrams.py                 # Mermaid diagram generation
+│   ├── generator.py                # SQL regenerator + dialect transpile
+│   ├── dbt_generator.py            # Generate dbt models from metadata
+│   ├── temporal.py                 # SCD2 pattern detection and generation
+│   ├── documenter.py               # Markdown documentation generation
+│   ├── cte_normalizer.py           # CTE extraction and SQL modularization
+│   ├── glossary.py                 # Business glossary management
+│   ├── datavault.py                # Data Vault pattern detection
+│   └── dimensional.py              # Dimensional model generation
 ├── examples/
-│   └── sales/               # Sample SQL files
-│       ├── customers.sql
-│       ├── orders.sql
-│       ├── order_summary.sql
-│       ├── products_bad.sql  # Intentionally bad SQL for optimizer demo
-│       ├── analytics_bad.sql # More anti-patterns for testing
-│       ├── dedup_bad.sql     # Non-deterministic patterns (ROW_NUMBER, etc.)
-│       └── dedup_good.sql    # Deterministic versions with tie-breakers
-├── workspace/
-│   └── sales/               # Generated output
-│       ├── model.conceptual.yaml
-│       └── diagrams/
-├── models/                   # YAML model examples
-│   ├── ecommerce/           # E-commerce pattern
-│   └── regulatory/          # Public regulatory frameworks (AnaCredit, RRE)
+│   ├── sales/                      # Original sample SQL files
+│   ├── erwin-replacement/          # YAML modeling + multi-dialect DDL
+│   ├── sales_layered/              # Layered pipeline → dbt project
+│   └── sql_process/                # Standalone SQL processor (no DuckDB)
+│       ├── sql_process.py          # CLI: folder in, optimised SQL + mapping out
+│       ├── sql_process_databricks.py  # Same flow as a Databricks notebook
+│       ├── _optimizer.py           # vendored, DuckDB-free
+│       ├── _determinism.py         # vendored, DuckDB-free
+│       └── input/_metadata.yaml    # source-table schema for sqlglot.qualify()
+├── workspace/                       # Generated artefacts (sales sample)
+├── models/                          # YAML model examples
+│   ├── ecommerce/                  # E-commerce pattern
+│   └── regulatory/                 # Public regulatory frameworks (AnaCredit, RRE)
 ├── docs/
-│   └── adr/                 # Architecture Decision Records
-└── schemas/                 # JSON schemas for validation
+│   └── adr/                        # Architecture Decision Records
+└── schemas/                        # JSON schemas for validation
 ```
 
 ## MDDE Lite Components

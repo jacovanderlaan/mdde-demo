@@ -734,7 +734,169 @@ def emit_openlineage(parsed_files: List[ParsedFile]) -> Dict[str, Any]:
                 "facets": output_facets,
             }],
         })
-    return {"events": events}
+
+    # Cross-file lineage stitching: when one file's source matches
+    # another's output, record the producer -> consumer edge.
+    stitching = build_stitching(parsed_files)
+    return {
+        "events": events,
+        "stitching": stitching,
+    }
+
+
+# =============================================================================
+# 5b. CROSS-FILE LINEAGE STITCHING
+# =============================================================================
+
+
+@dataclass
+class StitchEdge:
+    """One producer -> consumer edge between two files in the run."""
+    producer_file: str   # filename that emits the table
+    consumer_file: str   # filename that reads it
+    via_table: str       # the table/entity name they share
+
+
+def build_file_graph(
+    parsed_files: List[ParsedFile],
+) -> List[StitchEdge]:
+    """Compute cross-file edges by matching consumer source_tables
+    against producer entity_names.
+
+    A file's `entity_name` is treated as the table it produces.
+    A file's `source_tables` are the tables it consumes. Wherever
+    a consumer's source matches a producer's entity name, we record
+    a single edge.
+    """
+    # Build a map: entity_name -> producing file. If two files declare
+    # the same entity_name (rare; usually a copy-paste bug), the later
+    # one wins — and we surface it later in the report.
+    producers: Dict[str, ParsedFile] = {}
+    for pf in parsed_files:
+        if pf.parse_error:
+            continue
+        producers[pf.entity_name] = pf
+
+    edges: List[StitchEdge] = []
+    seen: Set[Tuple[str, str, str]] = set()
+    for consumer in parsed_files:
+        if consumer.parse_error:
+            continue
+        for src in consumer.source_tables:
+            # Match on the bare table name (last segment) and on the
+            # full qualified name. This covers both `FROM stg_customers`
+            # and `FROM main.gold.dim_customer` if the producer's
+            # entity_name is `dim_customer`.
+            candidates = {src, src.split(".")[-1]}
+            for cand in candidates:
+                producer = producers.get(cand)
+                if producer is None or producer is consumer:
+                    continue
+                key = (producer.path.name, consumer.path.name, cand)
+                if key in seen:
+                    continue
+                seen.add(key)
+                edges.append(StitchEdge(
+                    producer_file=producer.path.name,
+                    consumer_file=consumer.path.name,
+                    via_table=cand,
+                ))
+    return edges
+
+
+def build_stitching(
+    parsed_files: List[ParsedFile],
+) -> Dict[str, Any]:
+    """Stitching block packaged for inclusion in lineage.json."""
+    edges = build_file_graph(parsed_files)
+    return {
+        "edges": [
+            {
+                "producer_job": _entity_for_file(parsed_files, e.producer_file),
+                "consumer_job": _entity_for_file(parsed_files, e.consumer_file),
+                "via_table": e.via_table,
+            }
+            for e in edges
+        ],
+        "namespace": "mdde-demo.sql_process",
+        "edge_count": len(edges),
+    }
+
+
+def _entity_for_file(
+    parsed_files: List[ParsedFile],
+    filename: str,
+) -> str:
+    for pf in parsed_files:
+        if pf.path.name == filename:
+            return pf.entity_name
+    return filename
+
+
+def emit_mermaid_graph(parsed_files: List[ParsedFile]) -> str:
+    """Render the file dependency graph as a Mermaid flowchart.
+
+    Nodes are grouped by `pf.annotations.entity['layer']` so the
+    graph reads top-down: source -> staging -> integration ->
+    business. Files without a declared layer drop into an
+    "unknown" subgraph.
+    """
+    edges = build_file_graph(parsed_files)
+    by_layer: Dict[str, List[ParsedFile]] = {}
+    for pf in parsed_files:
+        if pf.parse_error:
+            continue
+        layer = pf.annotations.entity.get("layer", "unknown")
+        by_layer.setdefault(layer, []).append(pf)
+
+    # Stable layer ordering when present.
+    layer_order = ["source", "staging", "integration", "semantic",
+                   "business", "delivery", "unknown"]
+    sorted_layers = [l for l in layer_order if l in by_layer] + [
+        l for l in by_layer if l not in layer_order
+    ]
+
+    lines: List[str] = ["flowchart LR"]
+    for layer in sorted_layers:
+        lines.append(f"  subgraph {layer}")
+        for pf in by_layer[layer]:
+            node_id = pf.entity_name.replace(".", "_").replace("-", "_")
+            label = f"{pf.entity_name}<br/><i>{pf.path.name}</i>"
+            lines.append(f'    {node_id}["{label}"]')
+        lines.append("  end")
+
+    # Edges between entities, stable ordering by producer name.
+    edges = sorted(edges, key=lambda e: (e.producer_file, e.consumer_file))
+    for e in edges:
+        producer = _entity_for_file(parsed_files, e.producer_file)
+        consumer = _entity_for_file(parsed_files, e.consumer_file)
+        p_id = producer.replace(".", "_").replace("-", "_")
+        c_id = consumer.replace(".", "_").replace("-", "_")
+        lines.append(f"  {p_id} --> {c_id}")
+
+    # External source tables (referenced FROM but not produced by any
+    # file in the run). These hang off as inputs to the first layer.
+    produced = {pf.entity_name for pf in parsed_files if not pf.parse_error}
+    external_inputs: Dict[str, Set[str]] = {}
+    for pf in parsed_files:
+        if pf.parse_error:
+            continue
+        for src in pf.source_tables:
+            if src not in produced and src.split(".")[-1] not in produced:
+                external_inputs.setdefault(src, set()).add(pf.entity_name)
+    if external_inputs:
+        lines.append("  subgraph external [\"external sources\"]")
+        for src in sorted(external_inputs):
+            ext_id = "ext_" + src.replace(".", "_").replace("-", "_")
+            lines.append(f'    {ext_id}[("{src}")]')
+        lines.append("  end")
+        for src, consumers in sorted(external_inputs.items()):
+            ext_id = "ext_" + src.replace(".", "_").replace("-", "_")
+            for consumer in sorted(consumers):
+                c_id = consumer.replace(".", "_").replace("-", "_")
+                lines.append(f"  {ext_id} --> {c_id}")
+
+    return "\n".join(lines)
 
 
 # =============================================================================
@@ -859,6 +1021,34 @@ def emit_report(
         )
     else:
         lines.append("_No output columns to assess._")
+    lines.append("")
+
+    # Cross-file lineage stitching
+    edges = build_file_graph(parsed_files)
+    lines.append("## Cross-file lineage")
+    lines.append("")
+    if edges:
+        lines.append(
+            f"**{len(edges)}** producer-consumer edge(s) stitched across "
+            f"the file set."
+        )
+        lines.append("")
+        lines.append("| Producer | Consumer | Via table |")
+        lines.append("|---|---|---|")
+        for e in sorted(edges, key=lambda x: (x.producer_file, x.consumer_file)):
+            lines.append(
+                f"| `{e.producer_file}` | `{e.consumer_file}` | "
+                f"`{e.via_table}` |"
+            )
+        lines.append("")
+        lines.append("```mermaid")
+        lines.append(emit_mermaid_graph(parsed_files))
+        lines.append("```")
+    else:
+        lines.append(
+            "_No cross-file edges detected — every input file's source "
+            "tables are external to this folder._"
+        )
     lines.append("")
 
     # Annotations summary
