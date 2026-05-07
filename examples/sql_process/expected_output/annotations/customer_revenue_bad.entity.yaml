@@ -1,0 +1,7 @@
+entity:
+  name: customer_revenue
+  layer: business
+  stereotype: fact
+  description: Customer revenue rollup with several planted optimizer issues
+  domain: ''
+attributes: []

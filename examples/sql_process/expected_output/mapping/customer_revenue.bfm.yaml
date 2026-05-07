@@ -1,0 +1,50 @@
+target_entity: customer_revenue_clean
+target_layer: business
+target_stereotype: fact
+description: "Customer revenue rollup \u2014 well-formed reference target"
+source_entities:
+- stg_customers
+- raw_orders
+attributes:
+- target: customer_id
+  derivation: direct
+  expression: c.customer_id /* @pk @business_key */
+  sources:
+  - entity: c
+    attribute: customer_id
+- target: email
+  derivation: direct
+  expression: c.email /* @pii */
+  sources:
+  - entity: c
+    attribute: email
+- target: first_name
+  derivation: direct
+  expression: c.first_name /* @pii */
+  sources:
+  - entity: c
+    attribute: first_name
+- target: last_name
+  derivation: direct
+  expression: c.last_name /* @pii */
+  sources:
+  - entity: c
+    attribute: last_name
+- target: order_count
+  derivation: direct
+  expression: t.order_count /* @derived */
+  sources:
+  - entity: t
+    attribute: order_count
+- target: total_revenue
+  derivation: direct
+  expression: t.total_revenue /* @derived */
+  sources:
+  - entity: t
+    attribute: total_revenue
+- target: avg_order_value
+  derivation: direct
+  expression: t.avg_order_value /* @derived */
+  sources:
+  - entity: t
+    attribute: avg_order_value

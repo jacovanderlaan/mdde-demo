@@ -1,0 +1,8 @@
+target_entity: customer_revenue
+target_layer: business
+target_stereotype: fact
+description: Customer revenue rollup with several planted optimizer issues
+source_entities:
+- raw_orders
+- stg_customers
+attributes: []

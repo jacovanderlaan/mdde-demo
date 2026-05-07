@@ -1,0 +1,42 @@
+target: raw_orders
+version: 1.0.0
+layer: source
+stereotype: src_raw
+ctes: []
+sources:
+- name: landing.oms_orders_export
+  type: table
+outputs:
+- name: order_id
+  from_sources:
+  - <inherited>.order_id
+  derivation: direct
+- name: customer_id
+  from_sources:
+  - <inherited>.customer_id
+  derivation: direct
+- name: order_date
+  from_sources:
+  - <inherited>.order_date
+  derivation: direct
+- name: order_status
+  from_sources:
+  - <inherited>.order_status
+  derivation: direct
+- name: total_amount
+  from_sources:
+  - <inherited>.total_amount
+  derivation: direct
+- name: currency
+  from_sources:
+  - <inherited>.currency
+  derivation: direct
+- name: source_system
+  from_sources:
+  - <inherited>.source_system
+  derivation: direct
+contract:
+  owner: <unknown>
+  freshness_minutes: 60
+  primary_key:
+  - order_id

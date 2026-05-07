@@ -1,0 +1,53 @@
+target_entity: stg_customers
+target_layer: staging
+target_stereotype: stg_cleaned
+description: "Cleansed customers \u2014 typed, deduplicated, null-handled"
+source_entities:
+- raw_customers
+attributes:
+- target: customer_id
+  derivation: expression
+  expression: CAST(customer_id AS BIGINT) AS customer_id /* @pk @business_key */
+  sources:
+  - entity: <inherited>
+    attribute: customer_id
+- target: first_name
+  derivation: expression
+  expression: TRIM(first_name) AS first_name /* @pii */
+  sources:
+  - entity: <inherited>
+    attribute: first_name
+  tags:
+  - pii
+- target: last_name
+  derivation: expression
+  expression: TRIM(last_name) AS last_name /* @pii */
+  sources:
+  - entity: <inherited>
+    attribute: last_name
+  tags:
+  - pii
+- target: email
+  derivation: expression
+  expression: LOWER(TRIM(email)) AS email /* @pii */
+  sources:
+  - entity: <inherited>
+    attribute: email
+- target: phone
+  derivation: expression
+  expression: NULLIF(TRIM(phone), '') AS phone /* @pii @nullable */
+  sources:
+  - entity: <inherited>
+    attribute: phone
+- target: created_at
+  derivation: expression
+  expression: CAST(created_at AS TIMESTAMP) AS created_at
+  sources:
+  - entity: <inherited>
+    attribute: created_at
+- target: source_system
+  derivation: direct
+  expression: source_system
+  sources:
+  - entity: <inherited>
+    attribute: source_system

@@ -1,0 +1,42 @@
+target: customer_latest_orders
+version: 1.0.0
+layer: business
+stereotype: fact_dedup
+ctes:
+- ordered_orders
+- latest_per_customer
+sources:
+- name: stg_customers
+  type: table
+- name: raw_orders
+  type: table
+outputs:
+- name: customer_id
+  from_sources:
+  - c.customer_id
+  derivation: direct
+- name: email
+  from_sources:
+  - c.email
+  derivation: direct
+- name: latest_order_id
+  from_sources:
+  - l.order_id
+  derivation: rename
+- name: latest_order_date
+  from_sources:
+  - l.order_date
+  derivation: rename
+- name: latest_order_amount
+  from_sources:
+  - l.total_amount
+  derivation: rename
+- name: days_since_last_order
+  from_sources:
+  - l.order_date
+  derivation: expression
+contract:
+  owner: <unknown>
+  freshness_minutes: 60
+  primary_key:
+  - order_id

@@ -1,0 +1,70 @@
+target_entity: customer_segment_analytics
+target_layer: business
+target_stereotype: fact_aggregate
+description: Customer segment analytics with scalar subqueries and multi-CTE chain
+source_entities:
+- stg_customers
+- raw_orders
+attributes:
+- target: customer_id
+  derivation: direct
+  expression: rc.customer_id /* @pk @business_key */
+  sources:
+  - entity: rc
+    attribute: customer_id
+- target: email
+  derivation: direct
+  expression: c.email /* @pii */
+  sources:
+  - entity: c
+    attribute: email
+- target: first_name
+  derivation: direct
+  expression: c.first_name /* @pii */
+  sources:
+  - entity: c
+    attribute: first_name
+- target: last_name
+  derivation: direct
+  expression: c.last_name /* @pii */
+  sources:
+  - entity: c
+    attribute: last_name
+- target: order_count
+  derivation: direct
+  expression: rc.order_count
+  sources:
+  - entity: rc
+    attribute: order_count
+- target: total_revenue
+  derivation: direct
+  expression: rc.total_revenue
+  sources:
+  - entity: rc
+    attribute: total_revenue
+- target: avg_orders_overall
+  derivation: direct
+  expression: rc.avg_orders_overall
+  sources:
+  - entity: rc
+    attribute: avg_orders_overall
+- target: max_revenue_overall
+  derivation: direct
+  expression: rc.max_revenue_overall
+  sources:
+  - entity: rc
+    attribute: max_revenue_overall
+- target: revenue_rank
+  derivation: direct
+  expression: rc.revenue_rank /* @derived */
+  sources:
+  - entity: rc
+    attribute: revenue_rank
+- target: segment
+  derivation: direct
+  expression: rc.segment /* @derived */
+  sources:
+  - entity: rc
+    attribute: segment
+  tags:
+  - derived

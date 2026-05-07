@@ -1,0 +1,62 @@
+target_entity: raw_customers
+target_layer: source
+target_stereotype: src_raw
+description: Raw customer landing from CRM
+source_entities:
+- landing.crm_customers_export
+attributes:
+- target: customer_id
+  derivation: direct
+  expression: customer_id /* @pk @business_key */
+  sources:
+  - entity: <inherited>
+    attribute: customer_id
+  tags:
+  - business_key
+  - pk
+- target: first_name
+  derivation: direct
+  expression: first_name /* @pii */
+  sources:
+  - entity: <inherited>
+    attribute: first_name
+  tags:
+  - pii
+- target: last_name
+  derivation: direct
+  expression: last_name /* @pii */
+  sources:
+  - entity: <inherited>
+    attribute: last_name
+  tags:
+  - pii
+- target: email
+  derivation: direct
+  expression: email /* @pii @nullable */
+  sources:
+  - entity: <inherited>
+    attribute: email
+  tags:
+  - nullable
+  - pii
+- target: phone
+  derivation: direct
+  expression: phone /* @pii @nullable */
+  sources:
+  - entity: <inherited>
+    attribute: phone
+  tags:
+  - nullable
+  - pii
+- target: created_at
+  derivation: direct
+  expression: created_at
+  sources:
+  - entity: <inherited>
+    attribute: created_at
+- target: source_system
+  derivation: direct
+  expression: source_system
+  sources:
+  - entity: <inherited>
+    attribute: source_system

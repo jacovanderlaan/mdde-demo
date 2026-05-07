@@ -1,0 +1,55 @@
+target_entity: raw_orders
+target_layer: source
+target_stereotype: src_raw
+description: Raw orders landing from order management system
+source_entities:
+- landing.oms_orders_export
+attributes:
+- target: order_id
+  derivation: direct
+  expression: order_id /* @pk @business_key */
+  sources:
+  - entity: <inherited>
+    attribute: order_id
+  tags:
+  - business_key
+  - pk
+- target: customer_id
+  derivation: direct
+  expression: customer_id /* @fk(raw_customers.customer_id) */
+  sources:
+  - entity: <inherited>
+    attribute: customer_id
+  tags:
+  - fk
+  fk: raw_customers.customer_id
+- target: order_date
+  derivation: direct
+  expression: order_date
+  sources:
+  - entity: <inherited>
+    attribute: order_date
+- target: order_status
+  derivation: direct
+  expression: order_status
+  sources:
+  - entity: <inherited>
+    attribute: order_status
+- target: total_amount
+  derivation: direct
+  expression: total_amount
+  sources:
+  - entity: <inherited>
+    attribute: total_amount
+- target: currency
+  derivation: direct
+  expression: currency
+  sources:
+  - entity: <inherited>
+    attribute: currency
+- target: source_system
+  derivation: direct
+  expression: source_system
+  sources:
+  - entity: <inherited>
+    attribute: source_system

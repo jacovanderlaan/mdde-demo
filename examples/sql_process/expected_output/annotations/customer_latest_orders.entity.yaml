@@ -1,0 +1,21 @@
+entity:
+  name: customer_latest_orders
+  layer: business
+  stereotype: fact_dedup
+  description: Per-customer latest order via window dedup (QUALIFY pattern)
+  domain: ''
+attributes:
+- name: customer_id
+  is_primary_key: false
+  fk: stg_customers.customer_id
+- name: email
+  is_primary_key: false
+- name: latest_order_id
+  is_primary_key: false
+- name: latest_order_date
+  is_primary_key: false
+- name: latest_order_amount
+  is_primary_key: false
+- name: days_since_last_order
+  is_primary_key: false
+  derived: true

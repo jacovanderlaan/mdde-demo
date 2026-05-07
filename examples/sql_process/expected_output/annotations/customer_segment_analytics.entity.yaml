@@ -1,0 +1,28 @@
+entity:
+  name: customer_segment_analytics
+  layer: business
+  stereotype: fact_aggregate
+  description: Customer segment analytics with scalar subqueries and multi-CTE chain
+  domain: ''
+attributes:
+- name: customer_id
+  is_primary_key: false
+- name: email
+  is_primary_key: false
+- name: first_name
+  is_primary_key: false
+- name: last_name
+  is_primary_key: false
+- name: order_count
+  is_primary_key: false
+- name: total_revenue
+  is_primary_key: false
+- name: avg_orders_overall
+  is_primary_key: false
+- name: max_revenue_overall
+  is_primary_key: false
+- name: revenue_rank
+  is_primary_key: false
+- name: segment
+  is_primary_key: false
+  derived: true

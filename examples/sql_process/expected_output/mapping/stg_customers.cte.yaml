@@ -1,0 +1,42 @@
+target: stg_customers
+version: 1.0.0
+layer: staging
+stereotype: stg_cleaned
+ctes: []
+sources:
+- name: raw_customers
+  type: table
+outputs:
+- name: customer_id
+  from_sources:
+  - <inherited>.customer_id
+  derivation: expression
+- name: first_name
+  from_sources:
+  - <inherited>.first_name
+  derivation: expression
+- name: last_name
+  from_sources:
+  - <inherited>.last_name
+  derivation: expression
+- name: email
+  from_sources:
+  - <inherited>.email
+  derivation: expression
+- name: phone
+  from_sources:
+  - <inherited>.phone
+  derivation: expression
+- name: created_at
+  from_sources:
+  - <inherited>.created_at
+  derivation: expression
+- name: source_system
+  from_sources:
+  - <inherited>.source_system
+  derivation: direct
+contract:
+  owner: <unknown>
+  freshness_minutes: 60
+  primary_key:
+  - BIGINT

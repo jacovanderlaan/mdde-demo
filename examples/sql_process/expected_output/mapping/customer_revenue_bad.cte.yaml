@@ -1,0 +1,18 @@
+target: customer_revenue
+version: 1.0.0
+layer: business
+stereotype: fact
+ctes:
+- ranked
+- joined
+sources:
+- name: raw_orders
+  type: table
+- name: stg_customers
+  type: table
+outputs: []
+contract:
+  owner: <unknown>
+  freshness_minutes: 60
+  primary_key:
+  - customer_id

@@ -1,0 +1,58 @@
+target: customer_segment_analytics
+version: 1.0.0
+layer: business
+stereotype: fact_aggregate
+ctes:
+- shipped_orders
+- customer_totals
+- ranked_customers
+sources:
+- name: stg_customers
+  type: table
+- name: raw_orders
+  type: table
+outputs:
+- name: customer_id
+  from_sources:
+  - rc.customer_id
+  derivation: direct
+- name: email
+  from_sources:
+  - c.email
+  derivation: direct
+- name: first_name
+  from_sources:
+  - c.first_name
+  derivation: direct
+- name: last_name
+  from_sources:
+  - c.last_name
+  derivation: direct
+- name: order_count
+  from_sources:
+  - rc.order_count
+  derivation: direct
+- name: total_revenue
+  from_sources:
+  - rc.total_revenue
+  derivation: direct
+- name: avg_orders_overall
+  from_sources:
+  - rc.avg_orders_overall
+  derivation: direct
+- name: max_revenue_overall
+  from_sources:
+  - rc.max_revenue_overall
+  derivation: direct
+- name: revenue_rank
+  from_sources:
+  - rc.revenue_rank
+  derivation: direct
+- name: segment
+  from_sources:
+  - rc.segment
+  derivation: direct
+contract:
+  owner: <unknown>
+  freshness_minutes: 60
+  primary_key: []
