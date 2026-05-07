@@ -38,7 +38,17 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, Tuple
 
-import _bootstrap  # noqa: F401
+# Self-contained imports — vendored copies of the optimizer and
+# determinism checkers live as siblings (`_optimizer.py`,
+# `_determinism.py`). No DuckDB, no mdde_lite parent package, no
+# repo-root sys.path dance. Drop these four files into a Databricks
+# Workspace folder and the script runs.
+_HERE = (
+    os.path.dirname(os.path.abspath(__file__))
+    if "__file__" in globals() else os.getcwd()
+)
+if _HERE not in sys.path:
+    sys.path.insert(0, _HERE)
 
 import sqlglot
 from sqlglot import exp
@@ -340,9 +350,8 @@ class QualityFinding:
     auto_fixed: bool = False
 
 
-# Thin layer over mdde_lite/optimizer.py — we re-use what's already
-# tested rather than re-implementing the rule set.
-from src.mdde_lite import optimizer as lite_optimizer  # noqa: E402
+# Vendored optimizer + determinism (sibling modules, no DuckDB).
+import _optimizer as lite_optimizer  # noqa: E402
 
 
 def run_quality_checks(pf: ParsedFile) -> List[QualityFinding]:

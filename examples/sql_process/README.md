@@ -20,13 +20,42 @@ reads every `*.sql` file in a folder and produces:
 
 The script is the **lite, demonstrable** counterpart to the full
 DuckDB-backed parsers and optimisers in the private MDDE framework.
-It runs anywhere Python + sqlglot run.
+It runs anywhere Python + sqlglot run — laptop, CI, or a Databricks
+notebook.
 
 ---
 
-## Usage
+## Files in this folder
+
+| File | Purpose |
+|---|---|
+| `sql_process.py` | Main pipeline. Run as a CLI. |
+| `_optimizer.py` | Vendored quality-check rule set (no DuckDB). |
+| `_determinism.py` | Vendored determinism checker (no DuckDB). |
+| `sql_process_databricks.py` | Databricks notebook (source format). |
+| `input/` | 7 sample SQL files exercising the surface. |
+| `expected_output/` | Snapshot of what the script produces from `input/`. |
+| `README.md` | This file. |
+
+The two underscore-prefixed files are **vendored copies** of
+`src/mdde_lite/optimizer.py` and `src/mdde_lite/determinism.py` with
+the DuckDB persistence layer stripped. They're committed alongside
+`sql_process.py` so the four code files together are self-contained:
+drop them anywhere — laptop folder, Databricks Workspace folder,
+S3 prefix, anywhere — and the script runs without external paths
+or imports beyond `sqlglot` and `pyyaml`.
+
+If `mdde_lite/optimizer.py` upstream evolves, re-vendor by copying
+those two files into this folder and removing the `duckdb` /
+`from .schema` / `analyze_file` / `analyze_directory` bits.
+
+---
+
+## Usage — laptop / CI
 
 ```bash
+pip install sqlglot pyyaml
+
 # Top-level folder
 python sql_process.py input/ --out output/
 
@@ -34,7 +63,54 @@ python sql_process.py input/ --out output/
 python sql_process.py path/to/sql_corpus --out output/ --recursive
 ```
 
-Output structure:
+Works from any current working directory — the script locates its
+sibling vendored modules via `__file__`, not via the CWD.
+
+---
+
+## Usage — Databricks notebook
+
+Open `sql_process_databricks.py` in a Databricks Workspace. It's a
+notebook in source format with eight cells:
+
+1. `%pip install sqlglot pyyaml`
+2. Locate the module folder (defaults to the notebook's own folder)
+3. Configure widgets: `input_dir`, `output_dir`, `recursive`
+4. Run `process_folder(...)`
+5. Render `report.md` inline via `displayHTML(...)`
+6. Browse the generated artefact tree
+7. Open one mapping YAML
+8. Open the OpenLineage roll-up
+
+### Getting the four files into Databricks
+
+Three options, in order of ease:
+
+1. **Repos**: clone `mdde-demo` via the Repos UI; navigate to
+   `examples/sql_process/`. The notebook + vendored modules are
+   already side-by-side.
+2. **Workspace upload**: upload `sql_process.py`, `_optimizer.py`,
+   `_determinism.py`, and `sql_process_databricks.py` into the same
+   Workspace folder. Open the `_databricks.py` file — Databricks
+   recognises the `# Databricks notebook source` magic and renders it
+   as a notebook.
+3. **Volumes / DBFS**: place the files under
+   `/Volumes/<catalog>/<schema>/<volume>/sql_process/` and edit the
+   `module_dir` cell to point there.
+
+### Path conventions in Databricks
+
+The pipeline uses plain `pathlib.Path` so any of these work as
+`input_dir` or `output_dir`:
+
+- `/Volumes/main/default/code/sql_inputs` — Unity Catalog volumes
+- `/Workspace/Users/me@example.com/sql_inputs` — Workspace files (DBR 14+)
+- `/dbfs/mnt/data/sql_inputs` — DBFS-mounted storage
+- `/tmp/sql_outputs` — local cluster scratch (ephemeral)
+
+---
+
+## Output structure
 
 ```
 output/
