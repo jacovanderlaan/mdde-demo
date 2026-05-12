@@ -1,0 +1,6 @@
+"target_model_name","target_table_name","target_column_name","source_model_name","source_table_name","source_column_name","derived_indicator","movement_expression","dependency_type","source_version"
+"Converter","lateral_unnest","customer_id","RAW","customer","customer_id","false","c.customer_id AS customer_id","strict",""
+"Converter","lateral_unnest","email","RAW","customer","email","false","c.email AS email","strict",""
+"Converter","lateral_unnest","order_id","SSF","o","order_id","false","o.order_id AS order_id","strict",""
+"Converter","lateral_unnest","amount","SSF","o","amount","false","o.amount AS amount","strict",""
+"Converter","lateral_unnest","","RAW","orders","","false","","strict",""

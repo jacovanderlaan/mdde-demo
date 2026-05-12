@@ -1,12 +1,13 @@
 # sql_process — run report
 
-Files processed: **20**
+Files processed: **23**
 
 ## Files
 
 | File | Entity | Layer | Qualified | CTEs | Sources | Output cols | Quality issues |
 |---|---|---|---|---|---|---|---|
 | `agg_customer_summary.sql` | agg_customer_summary | business | yes | 0 | 2 | 8 | 2 |
+| `chained_cte_pipeline.sql` | chained_cte_pipeline | business | yes | 4 | 2 | 7 | 7 |
 | `customer_latest_orders.sql` | customer_latest_orders | business | yes | 2 | 2 | 6 | 6 |
 | `customer_revenue.sql` | customer_revenue_clean | business | yes | 2 | 2 | 7 | 6 |
 | `customer_revenue_bad.sql` | customer_revenue | business | yes | 2 | 2 | 10 | 12 |
@@ -16,6 +17,7 @@ Files processed: **20**
 | `except_subscribed_customers.sql` | except_subscribed_customers | business | yes | 0 | 2 | 2 | 2 |
 | `filtered_high_value.sql` | filtered_high_value | business | yes | 0 | 2 | 4 | 2 |
 | `having_top_spenders.sql` | having_top_spenders | business | yes | 0 | 2 | 4 | 3 |
+| `lateral_unnest.sql` | lateral_unnest | business | yes | 0 | 2 | 4 | 4 |
 | `nested_union_except.sql` | nested_union_except | business | yes | 0 | 2 | 2 | 9 |
 | `ordered_top_customers.sql` | ordered_top_customers | business | yes | 0 | 2 | 4 | 1 |
 | `passthrough_with_loans.sql` | passthrough_with_loans | business | yes | 2 | 2 | 6 | 6 |
@@ -26,16 +28,24 @@ Files processed: **20**
 | `stg_customers.sql` | stg_customers | staging | yes | 0 | 1 | 7 | 5 |
 | `union_revenue_breakdown.sql` | union_revenue_breakdown | business | yes | 0 | 1 | 4 | 3 |
 | `union_with_layering.sql` | union_with_layering | business | yes | 0 | 2 | 4 | 9 |
+| `window_ranked_orders.sql` | window_ranked_orders | business | yes | 0 | 2 | 8 | 3 |
 
 ## Quality findings
 
-**Total:** 104 (error=3, warning=26, info=75)  
+**Total:** 118 (error=4, warning=29, info=85)  
 **Auto-fixed:** 1
 
 | File | Location | Rule | Severity | Auto-fixed | Message |
 |---|---|---|---|---|---|
 | `agg_customer_summary.sql` | <file> | SELECT_STAR | warning | no | SELECT * detected - explicit column list recommended |
 | `agg_customer_summary.sql` | <file> | MISSING_SOURCE_VERSION | info | no | Filename 'agg_customer_summary.sql' has fewer than 3 hyphen-separated parts; ... |
+| `chained_cte_pipeline.sql` | <file> | SELECT_STAR | warning | no | SELECT * detected - explicit column list recommended |
+| `chained_cte_pipeline.sql` | <file> | MISSING_ALIAS | info | no | Table 'customer' has no alias in multi-table query |
+| `chained_cte_pipeline.sql` | <file> | MISSING_ALIAS | info | no | Table 'orders' has no alias in multi-table query |
+| `chained_cte_pipeline.sql` | <file> | MISSING_ALIAS | info | no | Table 'base_orders' has no alias in multi-table query |
+| `chained_cte_pipeline.sql` | <file> | DERIVATION_IN_WHERE | info | no | IS [NOT] NULL on raw column 'email' inside WHERE |
+| `chained_cte_pipeline.sql` | <file> | WINDOW_NON_UNIQUE_ORDER | warning | no | ROW_NUMBER() ORDER BY (lifetime_revenue) may not be unique within partition |
+| `chained_cte_pipeline.sql` | <file> | MISSING_SOURCE_VERSION | info | no | Filename 'chained_cte_pipeline.sql' has fewer than 3 hyphen-separated parts; ... |
 | `customer_latest_orders.sql` | <file> | MISSING_ALIAS | info | no | Table 'customer_latest_orders' has no alias in multi-table query |
 | `customer_latest_orders.sql` | <file> | MISSING_ALIAS | info | no | Table 'raw_orders' has no alias in multi-table query |
 | `customer_latest_orders.sql` | <file> | MISSING_ALIAS | info | no | Table 'ordered_orders' has no alias in multi-table query |
@@ -92,6 +102,10 @@ Files processed: **20**
 | `having_top_spenders.sql` | <file> | SELECT_STAR | warning | no | SELECT * detected - explicit column list recommended |
 | `having_top_spenders.sql` | <file> | SELECT_STAR | warning | no | SELECT * detected - explicit column list recommended |
 | `having_top_spenders.sql` | <file> | MISSING_SOURCE_VERSION | info | no | Filename 'having_top_spenders.sql' has fewer than 3 hyphen-separated parts; m... |
+| `lateral_unnest.sql` | <file> | DERIVATION_IN_WHERE | info | no | IS [NOT] NULL on raw column 'email' inside WHERE |
+| `lateral_unnest.sql` | <file> | COMBINED_SOURCE_FILTERS | info | no | WHERE clause references columns from 2 sources (c, o2) |
+| `lateral_unnest.sql` | <file> | MISSING_SOURCE_VERSION | info | no | Filename 'lateral_unnest.sql' has fewer than 3 hyphen-separated parts; moveme... |
+| `lateral_unnest.sql` | <predicate> | SUBQUERY_NOT_LIFTED | info | no | Subquery inside Lateral left inline — non-IN/EXISTS predicate subquery; lifti... |
 | `nested_union_except.sql` | <file> | MISSING_ALIAS | info | no | Table 'orders' has no alias in multi-table query |
 | `nested_union_except.sql` | <file> | MISSING_ALIAS | info | no | Table 'customer' has no alias in multi-table query |
 | `nested_union_except.sql` | <file> | MISSING_ALIAS | info | no | Table 'orders' has no alias in multi-table query |
@@ -138,10 +152,13 @@ Files processed: **20**
 | `union_with_layering.sql` | <file> | GROUPBY_NOT_ISOLATED | info | no | GROUP BY combined with WHERE and JOINs in a single SELECT |
 | `union_with_layering.sql` | <file> | GROUPBY_NOT_ISOLATED | info | no | GROUP BY combined with WHERE and JOINs in a single SELECT |
 | `union_with_layering.sql` | <file> | MISSING_SOURCE_VERSION | info | no | Filename 'union_with_layering.sql' has fewer than 3 hyphen-separated parts; m... |
+| `window_ranked_orders.sql` | <file> | MISSING_GROUP_BY | error | no | Aggregate function mixed with non-aggregated columns without GROUP BY |
+| `window_ranked_orders.sql` | <file> | WINDOW_NON_UNIQUE_ORDER | warning | no | ROW_NUMBER() ORDER BY (order_date) may not be unique within partition |
+| `window_ranked_orders.sql` | <file> | MISSING_SOURCE_VERSION | info | no | Filename 'window_ranked_orders.sql' has fewer than 3 hyphen-separated parts; ... |
 
 ## Mapping coverage
 
-**110/118** output columns have a resolved source attribute (93%)
+**129/137** output columns have a resolved source attribute (94%)
 
 ## Cross-file lineage
 
@@ -172,6 +189,7 @@ flowchart LR
   end
   subgraph business
     agg_customer_summary["agg_customer_summary<br/><i>agg_customer_summary.sql</i>"]
+    chained_cte_pipeline["chained_cte_pipeline<br/><i>chained_cte_pipeline.sql</i>"]
     customer_latest_orders["customer_latest_orders<br/><i>customer_latest_orders.sql</i>"]
     customer_revenue_clean["customer_revenue_clean<br/><i>customer_revenue.sql</i>"]
     customer_revenue["customer_revenue<br/><i>customer_revenue_bad.sql</i>"]
@@ -181,6 +199,7 @@ flowchart LR
     except_subscribed_customers["except_subscribed_customers<br/><i>except_subscribed_customers.sql</i>"]
     filtered_high_value["filtered_high_value<br/><i>filtered_high_value.sql</i>"]
     having_top_spenders["having_top_spenders<br/><i>having_top_spenders.sql</i>"]
+    lateral_unnest["lateral_unnest<br/><i>lateral_unnest.sql</i>"]
     nested_union_except["nested_union_except<br/><i>nested_union_except.sql</i>"]
     ordered_top_customers["ordered_top_customers<br/><i>ordered_top_customers.sql</i>"]
     passthrough_with_loans["passthrough_with_loans<br/><i>passthrough_with_loans.sql</i>"]
@@ -188,6 +207,7 @@ flowchart LR
     source_derivations["source_derivations<br/><i>source_derivations.sql</i>"]
     union_revenue_breakdown["union_revenue_breakdown<br/><i>union_revenue_breakdown.sql</i>"]
     union_with_layering["union_with_layering<br/><i>union_with_layering.sql</i>"]
+    window_ranked_orders["window_ranked_orders<br/><i>window_ranked_orders.sql</i>"]
   end
   raw_customers --> stg_customers
   raw_orders --> customer_latest_orders
@@ -210,28 +230,34 @@ flowchart LR
   ext_landing_crm_customers_export --> raw_customers
   ext_landing_oms_orders_export --> raw_orders
   ext_raw_customer --> agg_customer_summary
+  ext_raw_customer --> chained_cte_pipeline
   ext_raw_customer --> distinct_customers
   ext_raw_customer --> except_subscribed_customers
   ext_raw_customer --> filtered_high_value
   ext_raw_customer --> having_top_spenders
+  ext_raw_customer --> lateral_unnest
   ext_raw_customer --> nested_union_except
   ext_raw_customer --> ordered_top_customers
   ext_raw_customer --> passthrough_with_loans
   ext_raw_customer --> predicate_subqueries
   ext_raw_customer --> source_derivations
   ext_raw_customer --> union_with_layering
+  ext_raw_customer --> window_ranked_orders
   ext_raw_loans --> passthrough_with_loans
   ext_raw_loans --> predicate_subqueries
   ext_raw_orders --> agg_customer_summary
+  ext_raw_orders --> chained_cte_pipeline
   ext_raw_orders --> except_subscribed_customers
   ext_raw_orders --> filtered_high_value
   ext_raw_orders --> having_top_spenders
+  ext_raw_orders --> lateral_unnest
   ext_raw_orders --> nested_union_except
   ext_raw_orders --> ordered_top_customers
   ext_raw_orders --> predicate_subqueries
   ext_raw_orders --> source_derivations
   ext_raw_orders --> union_revenue_breakdown
   ext_raw_orders --> union_with_layering
+  ext_raw_orders --> window_ranked_orders
 ```
 
 ## SQL-First annotations
@@ -239,6 +265,7 @@ flowchart LR
 | File | Entity | Annotated columns | Tags found |
 |---|---|---|---|
 | `agg_customer_summary.sql` | agg_customer_summary | 0 | — |
+| `chained_cte_pipeline.sql` | chained_cte_pipeline | 0 | — |
 | `customer_latest_orders.sql` | customer_latest_orders | 3 | derived, fk, pk |
 | `customer_revenue.sql` | customer_revenue_clean | 1 | pk |
 | `customer_revenue_bad.sql` | customer_revenue | 1 | pk |
@@ -248,6 +275,7 @@ flowchart LR
 | `except_subscribed_customers.sql` | except_subscribed_customers | 0 | — |
 | `filtered_high_value.sql` | filtered_high_value | 0 | — |
 | `having_top_spenders.sql` | having_top_spenders | 0 | — |
+| `lateral_unnest.sql` | lateral_unnest | 0 | — |
 | `nested_union_except.sql` | nested_union_except | 0 | — |
 | `ordered_top_customers.sql` | ordered_top_customers | 0 | — |
 | `passthrough_with_loans.sql` | passthrough_with_loans | 0 | — |
@@ -258,3 +286,4 @@ flowchart LR
 | `stg_customers.sql` | stg_customers | 3 | business_key, pii, pk |
 | `union_revenue_breakdown.sql` | union_revenue_breakdown | 0 | — |
 | `union_with_layering.sql` | union_with_layering | 0 | — |
+| `window_ranked_orders.sql` | window_ranked_orders | 0 | — |
