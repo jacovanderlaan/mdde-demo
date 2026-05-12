@@ -306,32 +306,131 @@ def _pre_parse_union_separator(sql: str, separator: Optional[str]) -> str:
     explicit UNION ALL before parsing.
 
     The customer site writes UNION ALL between multiple SELECT
-    statements as a comma at the start of a SELECT line, e.g.::
+    statements as a comma between SELECTs. Two shapes occur in
+    practice:
 
-        SELECT a, b, c FROM t1
-        ,
-        SELECT a, b, c FROM t2
+        Shape A (comma alone on a line):
+            SELECT a, b, c FROM t1
+            ,
+            SELECT a, b, c FROM t2
 
-    sqlglot can't parse that. This pre-pass replaces each
-    standalone comma between two SELECTs with ``UNION ALL``.
+        Shape B (comma at end of previous line):
+            SELECT a, b, c FROM t1,
+            SELECT a, b, c FROM t2
+
+    sqlglot can't parse either. This pre-pass rewrites both into
+    explicit ``UNION ALL`` keywords.
+
+    The match is anchored on a comma whose NEXT non-whitespace
+    token (across newlines) is ``SELECT``. A comma followed by a
+    column name / expression (the normal in-SELECT case) is left
+    alone. Commas inside parentheses (subquery argument lists,
+    function calls) are also left alone — when followed by SELECT
+    they're a subquery, not a UNION.
 
     ``separator`` is the configurable token; only ``","`` is
     supported today. Returns the input unchanged when separator is
-    None/empty or the pattern doesn't match.
+    None/empty.
     """
     if not separator or separator != ",":
         return sql
-    # Match: end of statement (comma/newline) followed by optional
-    # whitespace, then a newline, then optional whitespace and a
-    # standalone comma alone on its line, then optional whitespace
-    # and the keyword SELECT. Replace the bare comma with UNION ALL.
-    # Conservative pattern: only fires when the line is just a comma
-    # surrounded by whitespace, between two SELECTs.
-    pattern = re.compile(
-        r"(\n[ \t]*)(,)(\s*\n[ \t]*)(?=SELECT\b)",
-        re.IGNORECASE,
-    )
-    return pattern.sub(r"\1UNION ALL\3", sql)
+
+    # Strategy: scan character-by-character tracking paren depth.
+    # When we see a comma at paren depth 0, look ahead for SELECT
+    # (skipping whitespace + comments). If found, replace the comma.
+    out: List[str] = []
+    depth = 0
+    in_string: Optional[str] = None  # current quote char if inside a string
+    in_line_comment = False
+    in_block_comment = False
+    i = 0
+    n = len(sql)
+    while i < n:
+        ch = sql[i]
+        if in_line_comment:
+            out.append(ch)
+            if ch == "\n":
+                in_line_comment = False
+            i += 1
+            continue
+        if in_block_comment:
+            out.append(ch)
+            if ch == "*" and i + 1 < n and sql[i + 1] == "/":
+                out.append("/")
+                in_block_comment = False
+                i += 2
+            else:
+                i += 1
+            continue
+        if in_string is not None:
+            out.append(ch)
+            if ch == in_string and (i == 0 or sql[i - 1] != "\\"):
+                in_string = None
+            i += 1
+            continue
+        # Detect entry into a string / comment.
+        if ch in ('"', "'"):
+            in_string = ch
+            out.append(ch)
+            i += 1
+            continue
+        if ch == "-" and i + 1 < n and sql[i + 1] == "-":
+            in_line_comment = True
+            out.append(ch)
+            i += 1
+            continue
+        if ch == "/" and i + 1 < n and sql[i + 1] == "*":
+            in_block_comment = True
+            out.append(ch)
+            out.append("*")
+            i += 2
+            continue
+        if ch == "(":
+            depth += 1
+            out.append(ch)
+            i += 1
+            continue
+        if ch == ")":
+            if depth > 0:
+                depth -= 1
+            out.append(ch)
+            i += 1
+            continue
+        if ch == "," and depth == 0:
+            # Look ahead: is the next non-whitespace, non-comment
+            # token the keyword SELECT?
+            j = i + 1
+            while j < n:
+                # Skip whitespace.
+                if sql[j].isspace():
+                    j += 1
+                    continue
+                # Skip line / block comments in the gap.
+                if j + 1 < n and sql[j] == "-" and sql[j + 1] == "-":
+                    while j < n and sql[j] != "\n":
+                        j += 1
+                    continue
+                if j + 1 < n and sql[j] == "/" and sql[j + 1] == "*":
+                    j += 2
+                    while j + 1 < n and not (sql[j] == "*" and sql[j + 1] == "/"):
+                        j += 1
+                    j += 2
+                    continue
+                break
+            if j + 5 < n and sql[j:j + 6].upper() == "SELECT" and (
+                j + 6 == n or not sql[j + 6].isalnum() and sql[j + 6] != "_"
+            ):
+                # Rewrite this comma as UNION ALL. Preserve any
+                # whitespace/comments between the comma and SELECT
+                # by writing them after the keyword.
+                out.append("\nUNION ALL")
+                # Keep the original gap (whitespace + comments) so
+                # the next iteration writes it.
+                i += 1
+                continue
+        out.append(ch)
+        i += 1
+    return "".join(out)
 
 
 def parse_file(
@@ -1019,21 +1118,39 @@ def push_projections_to_source_ctes(
     if not isinstance(target, exp.Select):
         return sql, findings
 
-    # Existing CTE names — these are off-limits as pushdown targets.
+    # Existing CTEs — by default off-limits as pushdown targets.
+    # Exception: a "passthrough" CTE shaped exactly as
+    # ``SELECT * FROM <real_table> [WHERE ...]`` is treated as a thin
+    # wrapper over the real table — we push projections / predicates
+    # INTO that CTE's body (rewriting ``*`` to the actual projection
+    # list and AND-merging the WHERE). Anything more complex (joins,
+    # GROUP BY, UNION, explicit columns, DISTINCT, ...) stays off
+    # limits.
     existing_with = target.args.get("with_")
     existing_cte_names: Set[str] = set()
+    passthrough_ctes: Dict[str, Tuple[exp.CTE, exp.Select, exp.Table]] = {}
+    # ^ keyed by CTE name -> (CTE node, inner SELECT, underlying Table)
     if existing_with:
         for cte in existing_with.expressions:
-            existing_cte_names.add(cte.alias_or_name)
+            cte_name = cte.alias_or_name
+            existing_cte_names.add(cte_name)
+            pt = _passthrough_cte_target(cte)
+            if pt is not None:
+                inner_select, real_table = pt
+                passthrough_ctes[cte_name] = (cte, inner_select, real_table)
 
     # Collect base-table sources (table + alias) from the outer FROM
-    # and JOINs. Skip references to existing CTEs. sqlglot stores
-    # FROM under "from_" (trailing underscore, like "with_").
+    # and JOINs. Skip references to non-passthrough existing CTEs.
+    # For passthrough CTEs, treat the underlying real table as the
+    # push target but remember the CTE so we mutate IT instead of
+    # creating a new sibling CTE. sqlglot stores FROM under
+    # "from_" (trailing underscore, like "with_").
     from_clause = target.args.get("from_") or target.args.get("from")
     if not from_clause:
         return sql, findings
 
-    sources: List[Tuple[str, str, exp.Table]] = []  # (table_name, alias, Table node)
+    # (table_name, alias, table_node, passthrough_cte_name_or_None)
+    sources: List[Tuple[str, str, exp.Table, Optional[str]]] = []
     other_aliases: Set[str] = set()
 
     def collect_table(t: exp.Table) -> None:
@@ -1041,10 +1158,19 @@ def push_projections_to_source_ctes(
         if not name:
             return
         if name in existing_cte_names:
+            if name in passthrough_ctes:
+                # Push INTO this CTE. The "real" table for pushdown is
+                # the table inside the CTE body; the outer alias used
+                # by the outer SELECT is the CTE alias (or its name).
+                _, _, real_table = passthrough_ctes[name]
+                alias = t.alias or name
+                sources.append((real_table.name, alias, real_table, name))
+                other_aliases.add(alias)
+                return
             other_aliases.add(t.alias or name)
             return
         alias = t.alias or name
-        sources.append((name, alias, t))
+        sources.append((name, alias, t, None))
         other_aliases.add(alias)
 
     # FROM side
@@ -1071,10 +1197,21 @@ def push_projections_to_source_ctes(
         predicates: List[exp.Expression] = field(default_factory=list)
         outer_replacements: Dict[int, exp.Expression] = field(default_factory=dict)
         # ^ keyed by id(original projection) -> simple `alias.new_name` ref
+        passthrough_cte_name: Optional[str] = None
+        # ^ When set, the source is an existing passthrough CTE
+        # (``WITH name AS (SELECT * FROM real_table [WHERE ...])``).
+        # The apply step mutates that CTE's body in place instead of
+        # creating a new ``<table>_prepared`` / ``<table>_filtered``
+        # sibling CTE.
 
     plans: Dict[str, PushPlan] = {
-        alias: PushPlan(table_name=tn, alias=alias, table_node=tnode)
-        for tn, alias, tnode in sources
+        alias: PushPlan(
+            table_name=tn,
+            alias=alias,
+            table_node=tnode,
+            passthrough_cte_name=pt_name,
+        )
+        for tn, alias, tnode, pt_name in sources
     }
     fallback_idx = 1
 
@@ -1133,62 +1270,58 @@ def push_projections_to_source_ctes(
     if not any(p.projections or p.predicates for p in plans.values()):
         return sql, findings
 
+    # Apply the outer SELECT + WHERE rewrites FIRST. The per-source
+    # CTE-build loop below uses ``_collect_alias_columns(target, ...)``
+    # to figure out which additional source columns to expose; that
+    # must run against the POST-rewrite outer query so it doesn't
+    # re-discover the projections we just moved into the CTE.
+    target.set("expressions", new_outer_projections)
+    if where is not None:
+        new_where = _rebuild_and(new_where_parts)
+        if new_where is None:
+            target.set("where", None)
+        else:
+            where.set("this", new_where)
+
     # ------------------------------------------------------------------
     # Apply: build per-source CTEs and rewrite the outer SELECT.
     # Naming follows the customer convention (see CUSTOMER_RULES.md
     # rule 7): ``<table>_filtered`` when a WHERE predicate is pushed,
     # ``<table>_prepared`` when only projections are pushed (no
-    # filter).
+    # filter). For passthrough CTEs (``WITH x AS (SELECT * FROM t
+    # [WHERE ...])``) we MUTATE the existing CTE's body in place
+    # instead of adding a new sibling CTE — preserves the user's CTE
+    # name and avoids stacking ``x`` + ``t_prepared`` for the same
+    # source.
     # ------------------------------------------------------------------
     new_ctes: List[exp.CTE] = []
     for plan in plans.values():
         if not (plan.projections or plan.predicates):
             continue
 
-        # Pick a unique CTE name.
-        suffix = "_filtered" if plan.predicates else "_prepared"
-        base = f"{plan.table_name}{suffix}"
-        cte_name = base
-        counter = 2
-        while cte_name in used_cte_names:
-            cte_name = f"{base}_{counter}"
-            counter += 1
-        used_cte_names.add(cte_name)
-
-        # Rewrite the pushed projections to drop the source alias —
-        # inside the CTE, everything is one table.
+        # Build the CTE's projection list. Same logic for new CTEs and
+        # for mutating an existing passthrough CTE.
         cte_projections: List[exp.Expression] = []
         already_projected: Set[str] = set()
-        # Track the set of SOURCE column names already satisfied by
-        # a pushed projection. A projection like
-        # ``UPPER(c.email) AS email_upper`` reads ``email`` from the
-        # source; the outer SELECT will reference ``c.email_upper``
-        # (after the rewrite below), so we don't need to also expose
-        # ``email`` separately. But if the outer SELECT independently
-        # reads ``c.email`` (a different output), we DO need that.
-        source_columns_pushed: Set[str] = set()
         for original, col_name in plan.projections:
             inner = _strip_alias(original, plan.alias)
             if isinstance(original, exp.Alias) or not _is_simple_column_named(inner, col_name):
                 inner = exp.alias_(inner, col_name)
             cte_projections.append(inner)
             already_projected.add(col_name)
-            # Track source columns the pushed projection covers — we
-            # don't want to expose them again as bare references.
-            for src_col in original.find_all(exp.Column):
-                if src_col.table == plan.alias or not src_col.table:
-                    source_columns_pushed.add(src_col.name)
 
         # Find every column the OUTER query references via this alias
-        # but that pushdown didn't pick up via an aliased projection.
-        # These get exposed as bare column references so the outer
-        # SELECT still resolves. Skip names that are already covered
-        # by a pushed source column.
+        # (in projections, JOIN ON, WHERE, etc.). For each such
+        # reference that pushdown didn't already cover via an aliased
+        # projection of the SAME output name, expose the raw column
+        # in the CTE. This is what keeps ``prp.Product`` resolvable
+        # in a JOIN ON when there's also a pushed
+        # ``Product AS financing_product_id`` projection — the JOIN
+        # needs the raw ``Product`` and the projection produces a
+        # different output name.
         referenced_columns = _collect_alias_columns(target, plan.alias)
         for col_name in sorted(referenced_columns):
             if col_name in already_projected:
-                continue
-            if col_name in source_columns_pushed:
                 continue
             cte_projections.append(exp.column(col_name))
             already_projected.add(col_name)
@@ -1201,6 +1334,42 @@ def push_projections_to_source_ctes(
 
         # Rewrite the pushed predicates similarly.
         cte_predicates = [_strip_alias(p, plan.alias) for p in plan.predicates]
+
+        if plan.passthrough_cte_name is not None:
+            # Mutate the existing passthrough CTE: replace its
+            # ``SELECT *`` projection list with the pushed columns
+            # and AND-merge new predicates into its existing WHERE.
+            cte_node, inner_select, _real_table = passthrough_ctes[
+                plan.passthrough_cte_name
+            ]
+            inner_select.set("expressions", cte_projections)
+            existing_pred = (
+                inner_select.args.get("where").this
+                if inner_select.args.get("where") is not None
+                else None
+            )
+            merged_parts: List[exp.Expression] = []
+            if existing_pred is not None:
+                merged_parts.extend(_split_and(existing_pred))
+            merged_parts.extend(cte_predicates)
+            merged_pred = _rebuild_and(merged_parts)
+            if merged_pred is None:
+                inner_select.set("where", None)
+            else:
+                inner_select.set("where", exp.Where(this=merged_pred))
+            # Don't repoint the outer source — it already references
+            # ``plan.passthrough_cte_name``.
+            continue
+
+        # Pick a unique CTE name for a brand-new sibling CTE.
+        suffix = "_filtered" if plan.predicates else "_prepared"
+        base = f"{plan.table_name}{suffix}"
+        cte_name = base
+        counter = 2
+        while cte_name in used_cte_names:
+            cte_name = f"{base}_{counter}"
+            counter += 1
+        used_cte_names.add(cte_name)
 
         cte_select = exp.Select(expressions=cte_projections).from_(
             exp.Table(this=exp.to_identifier(plan.table_name))
@@ -1227,17 +1396,6 @@ def push_projections_to_source_ctes(
                 "alias",
                 exp.TableAlias(this=exp.to_identifier(plan.alias)),
             )
-
-    # Apply the outer SELECT projection rewrite.
-    target.set("expressions", new_outer_projections)
-
-    # Apply the outer WHERE rewrite (or strip the WHERE entirely).
-    if where is not None:
-        new_where = _rebuild_and(new_where_parts)
-        if new_where is None:
-            target.set("where", None)
-        else:
-            where.set("this", new_where)
 
     # Merge new CTEs into the WITH clause (preserve existing order, new
     # _proj CTEs sort first so they're declared before they're used).
@@ -1267,6 +1425,50 @@ def _strip_alias(node: exp.Expression, alias: str) -> exp.Expression:
         if col.table == alias:
             col.set("table", None)
     return out
+
+
+def _passthrough_cte_target(
+    cte: exp.CTE,
+) -> Optional[Tuple[exp.Select, exp.Table]]:
+    """If ``cte`` is shaped exactly ``SELECT * FROM <real_table>
+    [WHERE ...]`` (no JOIN, no GROUP BY, no UNION, no DISTINCT, no
+    explicit column list), return ``(inner SELECT, underlying Table)``.
+
+    These are the CTEs we treat as thin wrappers — the
+    projection-pushdown pass can mutate their body in place
+    instead of adding a sibling ``<table>_prepared`` CTE.
+
+    Returns ``None`` for anything more complex.
+    """
+    body = cte.this
+    if not isinstance(body, exp.Select):
+        return None
+    # Must be a single SELECT — bail on UNION / INTERSECT / EXCEPT.
+    if isinstance(body, exp.Union) or body.args.get("unions"):
+        return None
+    if body.args.get("distinct"):
+        return None
+    if body.args.get("group"):
+        return None
+    if body.args.get("having"):
+        return None
+    if body.args.get("qualify"):
+        return None
+    if body.args.get("joins"):
+        return None
+    # Projection list must be exactly one ``*``.
+    projections = body.expressions or []
+    if len(projections) != 1 or not isinstance(projections[0], exp.Star):
+        return None
+    # FROM must be a single base table.
+    from_clause = body.args.get("from_") or body.args.get("from")
+    if from_clause is None:
+        return None
+    tables = list(from_clause.find_all(exp.Table))
+    subqueries = list(from_clause.find_all(exp.Subquery))
+    if len(tables) != 1 or subqueries:
+        return None
+    return body, tables[0]
 
 
 def _collect_alias_columns(node: exp.Expression, alias: str) -> Set[str]:
