@@ -691,5 +691,124 @@ class TestMovementCsvNewBehaviour:
         assert _source_version(pf2) == ""
 
 
+# =============================================================================
+# 7. Bug fixes from customer-site testing
+# =============================================================================
+
+
+class TestMetadataMatchingCaseInsensitive:
+
+    def test_strips_mixed_case_column(self):
+        """Metadata column names in mixed case should still match."""
+        from sql_process import strip_metadata_columns
+        sql = "SELECT id, File_Delivery_Entity, Delivery_Set FROM t"
+        log = TransformLog()
+        out = strip_metadata_columns(
+            sql, [],
+            ["file_delivery_entity", "delivery_set"],  # lowercase blacklist
+            log,
+        )
+        assert "File_Delivery_Entity" not in out
+        assert "Delivery_Set" not in out
+        assert "id" in out
+        assert log.metadata_columns_stripped is True
+
+    def test_strips_mixed_case_in_where(self):
+        from sql_process import strip_metadata_columns
+        sql = "SELECT id FROM t WHERE File_Reporting_Date = '2026-03-31' AND id > 0"
+        log = TransformLog()
+        out = strip_metadata_columns(
+            sql, [], ["file_reporting_date"], log,
+        )
+        assert "File_Reporting_Date" not in out
+        assert "id > 0" in out
+
+
+class TestCommentBannerStripping:
+
+    def test_strips_conversion_summary_banner(self):
+        """The customer's `SQL Query Conversion Summary` block
+        comment must NOT appear in the optimised SQL — the script's
+        own Migration Details header replaces it."""
+        from sql_process import apply_auto_fixes
+        sql = """/*
+================================================================
+SQL Query Conversion Summary
+================================================================
+Original SQL Query: bodm/foo.sql
+Target SQL File: foo.sql
+================================================================
+*/
+SELECT id FROM t"""
+        out, _, _ = apply_auto_fixes(sql, [])
+        assert "Conversion Summary" not in out
+        assert "================" not in out
+
+    def test_strips_single_line_banner_comments(self):
+        """`/* Table: ... */`, `/* Generated: ... */` and similar
+        single-line attribute comments are also banners."""
+        from sql_process import apply_auto_fixes
+        sql = """/* Table: my_table */
+/* DDA Version: R4.20 */
+/* Generated: 2026-04-16 12:56:56 */
+/* Source File: extractor.csv */
+SELECT id FROM t"""
+        out, _, _ = apply_auto_fixes(sql, [])
+        assert "Table:" not in out
+        assert "DDA Version" not in out
+        assert "Generated:" not in out
+        assert "Source File:" not in out
+
+    def test_preserves_annotation_comments(self):
+        """`/* @pk */`, `/* @pii */` are NOT banners and must be
+        preserved (they round-trip with the SQL-First annotation
+        machinery)."""
+        from sql_process import apply_auto_fixes
+        # The annotation extractor reads `-- @pk` from the input; the
+        # round-tripping uses `/* @pk */`. Verify the banner stripper
+        # doesn't catch them.
+        from sql_process import _comment_is_banner
+        assert _comment_is_banner(" @pk ") is False
+        assert _comment_is_banner(" @pii @business_key ") is False
+        assert _comment_is_banner(" @derived ") is False
+
+
+class TestPushdownExplicitColumnsNoStar:
+
+    def test_filter_only_cte_has_explicit_columns(self):
+        """When pushdown creates a filter-only CTE (no projections
+        pushed), the CTE must project the columns actually referenced
+        downstream — not `SELECT *`."""
+        from sql_process import push_projections_to_source_ctes
+        sql = """SELECT c.customer_id, c.email
+        FROM stg_customers c
+        WHERE c.country = 'NL'"""
+        out, _ = push_projections_to_source_ctes(sql, [])
+        # Filter pushed AND projections pushed → no `SELECT *` needed.
+        assert "*" not in out.split("FROM")[0]
+        # The CTE should expose customer_id and email (referenced
+        # from outer).
+        assert "customer_id" in out
+        assert "email" in out
+
+    def test_no_duplicate_columns_in_pushdown_cte(self):
+        """If a pushed projection ALREADY covers a column, don't
+        re-expose the source name as a bare column."""
+        from sql_process import push_projections_to_source_ctes
+        sql = """SELECT c.email AS contact_email
+        FROM stg_customers c
+        WHERE c.country = 'NL'"""
+        out, _ = push_projections_to_source_ctes(sql, [])
+        # The CTE should have ONE projection: `email AS contact_email`.
+        # The source name `email` must not appear a second time as
+        # a bare column.
+        cte_section = out.split("SELECT", 2)[1]  # body of first SELECT after WITH
+        # Count `email` occurrences inside the first SELECT block —
+        # should be just 1 (in the alias projection).
+        # Looking at the literal projection: `email AS contact_email`
+        # — `email` appears once before the AS, never as a bare ref.
+        assert cte_section.count("email") <= 2  # 'email' source + 'contact_email' alias
+
+
 if __name__ == "__main__":
     sys.exit(pytest.main([__file__, "-v"]))

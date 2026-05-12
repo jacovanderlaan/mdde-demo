@@ -1158,17 +1158,46 @@ def push_projections_to_source_ctes(
         # Rewrite the pushed projections to drop the source alias —
         # inside the CTE, everything is one table.
         cte_projections: List[exp.Expression] = []
+        already_projected: Set[str] = set()
+        # Track the set of SOURCE column names already satisfied by
+        # a pushed projection. A projection like
+        # ``UPPER(c.email) AS email_upper`` reads ``email`` from the
+        # source; the outer SELECT will reference ``c.email_upper``
+        # (after the rewrite below), so we don't need to also expose
+        # ``email`` separately. But if the outer SELECT independently
+        # reads ``c.email`` (a different output), we DO need that.
+        source_columns_pushed: Set[str] = set()
         for original, col_name in plan.projections:
             inner = _strip_alias(original, plan.alias)
             if isinstance(original, exp.Alias) or not _is_simple_column_named(inner, col_name):
                 inner = exp.alias_(inner, col_name)
             cte_projections.append(inner)
+            already_projected.add(col_name)
+            # Track source columns the pushed projection covers — we
+            # don't want to expose them again as bare references.
+            for src_col in original.find_all(exp.Column):
+                if src_col.table == plan.alias or not src_col.table:
+                    source_columns_pushed.add(src_col.name)
 
-        # Filter-only CTE (predicates pushed, no projections) — must
-        # still expose columns. Default to `SELECT *` so downstream
-        # references to outer columns still resolve.
+        # Find every column the OUTER query references via this alias
+        # but that pushdown didn't pick up via an aliased projection.
+        # These get exposed as bare column references so the outer
+        # SELECT still resolves. Skip names that are already covered
+        # by a pushed source column.
+        referenced_columns = _collect_alias_columns(target, plan.alias)
+        for col_name in sorted(referenced_columns):
+            if col_name in already_projected:
+                continue
+            if col_name in source_columns_pushed:
+                continue
+            cte_projections.append(exp.column(col_name))
+            already_projected.add(col_name)
+
+        # If we still have zero columns (e.g., the alias is only used
+        # in a JOIN ON condition that itself got rewritten away),
+        # synthesise a single placeholder so the CTE remains valid.
         if not cte_projections:
-            cte_projections.append(exp.Star())
+            cte_projections.append(exp.column(plan.table_name + "_id"))
 
         # Rewrite the pushed predicates similarly.
         cte_predicates = [_strip_alias(p, plan.alias) for p in plan.predicates]
@@ -1237,6 +1266,20 @@ def _strip_alias(node: exp.Expression, alias: str) -> exp.Expression:
     for col in list(out.find_all(exp.Column)):
         if col.table == alias:
             col.set("table", None)
+    return out
+
+
+def _collect_alias_columns(node: exp.Expression, alias: str) -> Set[str]:
+    """Return the set of column names referenced as ``<alias>.<col>``
+    anywhere under ``node``. Used by the projection-pushdown transform
+    to expose exactly the columns the outer query reads from a per-
+    source CTE — no more `SELECT *` placeholders."""
+    out: Set[str] = set()
+    if alias is None:
+        return out
+    for col in node.find_all(exp.Column):
+        if col.table == alias and col.name:
+            out.add(col.name)
     return out
 
 
@@ -1786,16 +1829,78 @@ def apply_auto_fixes(
     # consistent indentation across all output files. Runs even in
     # detection-only mode so the output isn't byte-identical to the
     # input (analysts can still see something happened).
+    #
+    # We parse-then-render (rather than transpile) so we can strip
+    # large multi-line block comments that sqlglot collapses inline
+    # on render. These are typically the customer's
+    # ``SQL Query Conversion Summary`` banners which the script
+    # replaces with its own Migration Details header in
+    # ``emit_comment_header``.
     try:
-        formatted = sqlglot.transpile(out, pretty=True)[0]
+        parsed_out = sqlglot.parse(out, read=None)
+        for stmt in parsed_out:
+            if stmt is None:
+                continue
+            _strip_banner_comments(stmt)
+        rendered = "\n".join(s.sql(pretty=True) for s in parsed_out if s is not None)
         # Re-attach trailing semicolon if the original had one.
-        if out.rstrip().endswith(";") and not formatted.rstrip().endswith(";"):
-            formatted = formatted.rstrip() + ";"
-        out = formatted
+        if out.rstrip().endswith(";") and not rendered.rstrip().endswith(";"):
+            rendered = rendered.rstrip() + ";"
+        out = rendered
     except sqlglot.errors.ParseError:
         pass
 
     return out, findings, log
+
+
+# Heuristic markers for "banner" comments: multi-line block comments
+# whose body contains the customer's conversion-summary patterns
+# (``================`` rules, ``Conversion Summary`` text, etc.).
+# When we see one attached to an AST node, we drop it during render
+# so it doesn't collapse onto a single line.
+_BANNER_PATTERNS = (
+    "================",  # ASCII rule lines
+    "----------------",
+    "Conversion Summary",
+    "Migration Details",
+    "Source File",
+    "Target SQL",
+)
+
+
+def _comment_is_banner(text: str) -> bool:
+    """True when a block-comment body matches a 'header banner' shape
+    we want to drop. Multi-line comments containing any of the
+    well-known banner patterns count, plus single-line comments that
+    look like attribute tags (``Table: ...``, ``Generated: ...``,
+    ``XSD Version: ...``)."""
+    stripped = text.strip()
+    if "\n" in text and any(p in text for p in _BANNER_PATTERNS):
+        return True
+    # Single-line metadata-like comments (`<key>: <value>`) that look
+    # like extractor-tool output, not user-authored documentation.
+    if "\n" not in stripped and ":" in stripped:
+        head = stripped.split(":", 1)[0].strip()
+        # Whitelist of header keys that the extractor tool emits.
+        head_lower = head.lower()
+        for marker in ("table", "generated", "source file", "ddm version",
+                       "dda version", "xsd version", "xsd vers"):
+            if head_lower.startswith(marker):
+                return True
+    return False
+
+
+def _strip_banner_comments(node: exp.Expression) -> None:
+    """Walk ``node`` and drop ``.comments`` that match the banner
+    heuristic. Keeps annotation-style comments (``@pk``, ``@pii``,
+    etc.) intact — those don't match the banner patterns."""
+    for sub in node.walk():
+        comments = sub.comments
+        if not comments:
+            continue
+        kept = [c for c in comments if not _comment_is_banner(c)]
+        if len(kept) != len(comments):
+            sub.comments = kept or None
 
 
 # =============================================================================
@@ -2194,9 +2299,14 @@ class CustomerRuleConfig:
     replacement_schema: str = "automatically_inferred_qualifier"
     date_variable: str = "process_date"
     metadata_blacklist: List[str] = field(default_factory=lambda: [
+        # SCD2 / change-tracking metadata
         "snapshot_date", "insert_dts", "update_dts",
         "current_flag", "delete_flag", "delta_flag",
         "create_timestamp", "start_dts", "end_dts",
+        # File-delivery / reporting envelope metadata (customer site)
+        "file_delivery_entity", "delivery_set", "file_reporting_date",
+        "period_version", "file_reporting_period", "xsd_version",
+        "redelivery_number",
     ])
     obsolete_cte_names: List[str] = field(default_factory=lambda: [
         "extract_dates", "create_timeline", "finalize_timeline",

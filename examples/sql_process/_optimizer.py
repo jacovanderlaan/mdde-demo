@@ -564,10 +564,12 @@ def check_metadata_column_exposed(parsed: exp.Expression, config: dict) -> List[
     """Rule 4: metadata columns must not appear in CTE/final outputs.
 
     Walks every Select's projections; flags any column whose name
-    matches the metadata blacklist when it appears as an output column
-    (not inside a WHERE predicate)."""
+    matches the metadata blacklist (case-insensitive) when it appears
+    as an output column (not inside a WHERE predicate)."""
     diagnostics = []
-    blacklist = set(config.get("metadata_blacklist") or _DEFAULT_METADATA_BLACKLIST)
+    blacklist = {
+        b.lower() for b in (config.get("metadata_blacklist") or _DEFAULT_METADATA_BLACKLIST)
+    }
     for select in parsed.find_all(exp.Select):
         for proj in select.expressions:
             col_name = None
@@ -578,7 +580,7 @@ def check_metadata_column_exposed(parsed: exp.Expression, config: dict) -> List[
                 # Also catch `metadata_col AS something` — the source
                 # is what's blacklisted.
                 inner = proj.this
-                if isinstance(inner, exp.Column) and inner.name in blacklist:
+                if isinstance(inner, exp.Column) and inner.name.lower() in blacklist:
                     diagnostics.append(SQLDiagnostic(
                         diagnostic_type="METADATA_COLUMN_EXPOSED",
                         message=f"Metadata column '{inner.name}' exposed in output (as '{col_name}')",
@@ -586,7 +588,7 @@ def check_metadata_column_exposed(parsed: exp.Expression, config: dict) -> List[
                         suggestion=f"Remove '{inner.name}' from output; it should not propagate downstream",
                     ))
                     continue
-            if col_name and col_name in blacklist:
+            if col_name and col_name.lower() in blacklist:
                 diagnostics.append(SQLDiagnostic(
                     diagnostic_type="METADATA_COLUMN_EXPOSED",
                     message=f"Metadata column '{col_name}' exposed in output",

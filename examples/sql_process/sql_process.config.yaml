@@ -72,7 +72,10 @@ rules:
   # Rule 4 / 13: Metadata columns excluded from outputs AND from
   # WHERE predicates (the predicate is dropped from the WHERE; if
   # nothing remains, the entire WHERE is removed).
+  #
+  # Matching is case-insensitive — list lowercased names only.
   metadata_blacklist:
+    # SCD2 / change-tracking metadata
     - snapshot_date
     - insert_dts
     - update_dts
@@ -82,6 +85,14 @@ rules:
     - create_timestamp
     - start_dts
     - end_dts
+    # File-delivery / reporting envelope metadata (customer site)
+    - file_delivery_entity
+    - delivery_set
+    - file_reporting_date
+    - period_version
+    - file_reporting_period
+    - xsd_version
+    - redelivery_number
 
 
 # =============================================================================

@@ -22,7 +22,8 @@ WITH stg_customers_prepared AS (
   SELECT
     email, /* @pii */
     first_name, /* @pii */
-    last_name /* @pii */
+    last_name, /* @pii */
+    customer_id
   FROM stg_customers
 ), shipped_orders AS (
   SELECT
