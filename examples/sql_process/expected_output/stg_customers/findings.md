@@ -3,7 +3,7 @@
 **Parse:** ok
 **Qualify:** ok
 
-**Total:** 4 (error=0, warning=0, info=4)  
+**Total:** 5 (error=0, warning=0, info=5)  
 **Auto-fixed:** 0
 
 | Location | Rule | Severity | Auto-fixed | Message |
@@ -12,3 +12,4 @@
 | <file> | MISSING_ALIAS | info | no | Table 'raw_customers' has no alias in multi-table query |
 | <file> | DERIVATION_IN_WHERE | info | no | IS [NOT] NULL on raw column 'customer_id' inside WHERE |
 | <file> | PK_DEDUP_CHECK_MISSING | info | no | @pk annotations present but no ROW_NUMBER PARTITION BY <pk> for dedup verification |
+| <file> | MISSING_SOURCE_VERSION | info | no | Filename 'stg_customers.sql' has fewer than 3 hyphen-separated parts; movement.csv source_version will be empty |

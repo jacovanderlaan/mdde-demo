@@ -510,3 +510,114 @@ full context.
 - **Decision** (made during implementation, no explicit question): the existing call `lite_optimizer.analyze_sql(pf.raw_sql, pf.path.name)` was passing the filename as the `include_determinism` boolean. Fixed to pass `include_determinism=True` explicitly and added the new `config=` keyword.
 - **Why it matters:** `pf.path.name` is truthy for any non-empty string, so determinism checks always ran — but the call was semantically broken and would fail loudly the moment the signature changed. Fixed in this PR before adding the config parameter.
 - **Reflected in code at:** `run_quality_checks()`.
+
+---
+
+## Configurable YAML + per-customer overrides
+
+### D34. Config file location and naming
+
+- **Question:** where should the config YAML live?
+- **Decision:** ``sql_process.config.yaml`` next to ``sql_process.py``. Auto-discovered on every run; ``--config <path>`` overrides; ``--config none`` disables loading.
+- **Why it matters:** Bundling the default config with the script keeps "what does this run actually do" answerable from one place. Customers can clone, edit one YAML, and re-run. Putting the config next to input data was a tempting alternative but means two layouts to remember.
+- **Rejected:**
+  - "Auto-discover at ``<input_dir>/sql_process.config.yaml``" — clearer for multi-tenant but less obvious where defaults live.
+  - "Script + input-dir cascade" — three precedence layers is too much surface for a tool that runs in seconds.
+- **Reflected in code at:** ``sql_process.config.yaml`` (the file), ``load_config()``.
+
+### D35. Movement.csv defaults switched to Converter / SSF
+
+- **Question:** the customer asked for different defaults than what we'd shipped (``SSF`` / ``SSF_SOURCE``).
+- **Decision:** ``target_model_name`` defaults to ``Converter``; ``source_model_name`` defaults to ``SSF``. Override via YAML or ``--target-model`` / ``--source-model``.
+- **Why it matters:** Aligns with the customer site's vocabulary. The previous values had been guesses based on early conversations.
+- **Reflected in code at:** ``MovementConfig`` dataclass defaults; ``sql_process.config.yaml``.
+
+### D36. ``source_version`` column behaviour
+
+- **Question:** the customer wants a ``source_version`` column in movement.csv populated from the third hyphen-part of the filename. What if the filename has fewer than 3 parts?
+- **Decision:** Emit a warning (``MISSING_SOURCE_VERSION`` info finding) + leave the cell empty.
+- **Why it matters:**
+  - Empty cell matches the existing convention for join-only rows (D20). CSV consumers handle empty natively.
+  - Warning surfaces the gap so analysts can rename the file if needed. No silent failure.
+- **Rejected:**
+  - "Use the full stem when no hyphens" — surprising values in a downstream version column.
+  - "Empty without warning" — invisible failure mode.
+- **Reflected in code at:** ``_source_version()``; ``MISSING_SOURCE_VERSION`` finding emitted in ``run_quality_checks()``.
+
+### D37. Source qualifier handling in movement.csv
+
+- **Question:** when a source table has a schema qualifier (``schema.table``), where does the schema name go in the CSV row?
+- **Decision:** Strip catalog/schema from ``source_table_name`` (bare table name only). The schema name goes into ``source_model_name`` in UPPERCASE. Falls back to the config default when no schema is present.
+- **Why it matters:** Keeps ``source_table_name`` consistent regardless of how the analyst wrote the FROM clause. Per-row ``source_model_name`` preserves multi-schema fidelity (each row says exactly which model the column came from).
+- **Rejected:**
+  - "Single per-file source_model_name" — lossy when the query reads from multiple schemas.
+  - "Keep the qualified name in source_table_name" — inconsistent with what the customer's import tool expects.
+- **Reflected in code at:** ``_build_source_info_map()``, ``SourceInfo`` dataclass, ``emit_movement_csv_rows()``.
+
+### D38. LEFT JOIN → ``dependency_type=loose``
+
+- **Decision:** When a source is reached via ``LEFT JOIN``, every movement.csv row for that source uses ``dependency_type=loose`` instead of the config default (typically ``strict``).
+- **Why it matters:** A LEFT JOIN signals that the source is optional — its absence doesn't fail the query, so the dependency is genuinely looser. The customer's downstream tool treats ``loose`` differently from ``strict``.
+- **Reflected in code at:** ``SourceInfo.left_join`` populated by ``_build_source_info_map()``; ``_dep()`` helper in ``emit_movement_csv_rows()``.
+
+### D39. Table-level mapping granularity
+
+- **Question:** the customer wants a mode that emits one row per source table (no column-level detail).
+- **Decision:** Add a ``granularity`` field to ``MovementConfig`` with two values: ``column`` (default; existing behaviour) and ``table``. In table mode, one row per unique source table; ``target_column_name`` and ``source_column_name`` are empty; ``movement_expression`` is empty.
+- **Why it matters:** Table-level mapping is a separate customer ask — they want the dependency graph without the column detail for cases where column lineage isn't tractable or relevant.
+- **Reflected in code at:** ``MovementConfig.granularity``; the ``if config.granularity == "table"`` branch in ``emit_movement_csv_rows()``.
+
+### D40. Optional mapping outputs
+
+- **Question:** customers asked that ``mapping.bfm.yaml``, ``mapping.cte.yaml``, and ``annotation.entity.yaml`` become opt-in.
+- **Decision:** Default to OFF for all three. Enable via the ``outputs`` block in YAML (``bfm_mapping: true``, ``cte_mapping: true``, ``annotation_entity: true``).
+- **Why it matters:** These three artefacts duplicate information already in ``movement.csv`` or the optimised SQL. Most customers don't need them. Keeping them off by default produces tighter output folders.
+- **Reflected in code at:** ``OutputConfig`` dataclass; conditional ``write_yaml`` calls in ``process_folder``.
+
+### D41. Comma-to-UNION-ALL pre-parse
+
+- **Question:** the customer site writes UNION ALL between SELECTs as a bare comma at the start of a SELECT line. sqlglot can't parse that. What shape do we support and how strict is the pattern match?
+- **Decision:** A configurable ``optimize.union_separator`` (default ``","``). The pre-parse step matches commas that are alone on their line BETWEEN two SELECT statements, conservatively. Commas inside a SELECT list (between projections) are left alone.
+- **Why it matters:** Surgical regex avoids false positives on real SELECT lists. The customer's convention is the only triggering shape we support today; the config knob keeps the door open for other separators if a different site uses a different one.
+- **Reflected in code at:** ``_pre_parse_union_separator()`` called from ``parse_file()``.
+
+### D42. Qualifier-rewrite transform
+
+- **Question:** the customer wants every table reference in the optimised SQL prefixed by a single qualifier (default ``schema_identifier_ssf_snapshot``). What gets rewritten exactly?
+- **Decision:** Both catalog and schema parts are replaced. ``catalog.schema.table`` → ``<qualifier>.table``. ``schema.table`` → ``<qualifier>.table``. **Bare** table names are NOT rewritten (the rule only fires when there's already a qualifier). CTE names defined in the same query are skipped.
+- **Why it matters:**
+  - Replacing both catalog and schema matches what an SSF migration target expects.
+  - Leaving bare tables alone keeps test fixtures (which often use unqualified table names) untouched.
+  - Skipping CTEs avoids rewriting query-local names as if they were base tables.
+- **Rejected:**
+  - "Schema only, leave catalog" — would leave inconsistent qualifications in the output.
+  - "Add qualifier to bare tables too" — too aggressive; would mangle test fixtures.
+- **Reflected in code at:** ``apply_table_qualifier()``.
+
+### D43. Metadata-column stripping (rule 4 / 13 auto-fix)
+
+- **Question:** the customer wants metadata columns excluded from SELECT projections AND from WHERE predicates. What about when stripping leaves the WHERE empty?
+- **Decision:** Drop the WHERE clause entirely. Same auto-fix marks ``METADATA_COLUMN_EXPOSED`` findings as fixed. Movement.csv is filtered too (excluded outputs don't appear as rows) so the CSV reflects the optimised query.
+- **Why it matters:**
+  - Dropping the WHERE is the semantic intent: the predicate was about filtering on metadata; remove the metadata, remove the filter.
+  - The previous ``WHERE 1=1`` placeholder option conflicts with our existing ``WHERE_1_EQUALS_1`` auto-fix.
+  - Movement.csv staying in sync with the optimised SQL is the customer's primary expectation — both artefacts ship together.
+- **Rejected:**
+  - "Keep ``WHERE 1=1``" — bypass-then-undo with the existing rule.
+  - "Skip strip when WHERE would be empty" — leaves the metadata predicate intact, defeating the rule.
+- **Reflected in code at:** ``strip_metadata_columns()``; ``metadata_blacklist`` parameter on ``emit_movement_csv_rows()``.
+
+### D44. Genie prompt rewritten as instruction block
+
+- **Question:** the previous ``genie.md`` was a description of the query the user might paste *as* a query. The customer wants instructions to paste *above* their original query.
+- **Decision:** Rewrite ``emit_genie_prompt`` to produce a numbered list of optimisation rules drawn from the customer's pack, scoped to what's relevant for this run's configuration. Ends with ``"Original query follows."``.
+- **Why it matters:**
+  - Matches how the customer actually uses Genie: paste-rules-above-query, not paste-query-only.
+  - Scoping the rules by config keeps each prompt minimal (no schema-replacement instruction in the prompt when ``legacy_schemas`` is empty).
+- **Reflected in code at:** rewritten ``emit_genie_prompt()``.
+
+### D45. File include/exclude patterns
+
+- **Decision:** Two new config keys, ``files.include`` and ``files.exclude``, both lists of pathlib-glob strings relative to the input dir. ``include`` non-empty restricts the set; ``exclude`` is applied after include.
+- **Why it matters:** Customer test runs often target a subset of their corpus (one folder, one naming pattern). Adding includes/excludes avoids the workaround of copying SQL files to a scratch input dir.
+- **Reflected in code at:** ``FileConfig`` dataclass; ``_select_input_files()`` helper in ``process_folder()``.

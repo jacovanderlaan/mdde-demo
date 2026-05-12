@@ -453,7 +453,14 @@ class TestApplyAutoFixesIntegration:
 
     def test_full_pipeline_chains_transforms(self):
         """Schema replacement + date variable + format-normalise all
-        fire on the same input without breaking each other."""
+        fire on the same input without breaking each other.
+
+        Note: the qualifier-rewrite transform runs after schema
+        replacement, so the final output uses the default qualifier
+        ``schema_identifier_ssf_snapshot`` (not the
+        ``automatically_inferred_qualifier`` produced by step 1).
+        """
+        from sql_process import OptimizeConfig
         sql = """
         SELECT customer_id FROM bodm.customers
         WHERE CAST('{reporting_date}' AS DATE) >= _valid_from
@@ -462,10 +469,24 @@ class TestApplyAutoFixesIntegration:
         out, _, log = apply_auto_fixes(sql, [], cfg)
         assert log.schema_replaced is True
         assert log.legacy_date_replaced is True
-        assert "automatically_inferred_qualifier" in out
+        assert log.qualifier_rewritten is True
+        # Qualifier rewrite consumes the schema-replacement result.
+        assert "schema_identifier_ssf_snapshot.customers" in out
         assert "{process_date}" in out
         assert "bodm" not in out
         assert "{reporting_date}" not in out
+
+    def test_qualifier_rewrite_skipped_when_disabled(self):
+        """Setting OptimizeConfig.table_qualifier=None disables the
+        qualifier-rewrite step; schema-replacement output is kept."""
+        from sql_process import OptimizeConfig
+        sql = "SELECT id FROM bodm.customers"
+        cfg = CustomerRuleConfig(legacy_schemas=["bodm"])
+        opt = OptimizeConfig(table_qualifier=None)
+        out, _, log = apply_auto_fixes(sql, [], cfg, optimize_config=opt)
+        assert log.schema_replaced is True
+        assert log.qualifier_rewritten is False
+        assert "automatically_inferred_qualifier.customers" in out
 
     def test_idempotency_run_twice(self):
         """Running apply_auto_fixes twice on the same input should
@@ -478,6 +499,196 @@ class TestApplyAutoFixesIntegration:
         out1, _, _ = apply_auto_fixes(sql, [], cfg)
         out2, _, _ = apply_auto_fixes(out1, [], cfg)
         assert out1 == out2
+
+
+# =============================================================================
+# 6. New transforms / config
+# =============================================================================
+
+
+class TestQualifierRewrite:
+
+    def test_replaces_catalog_and_schema(self):
+        from sql_process import apply_table_qualifier
+        sql = "SELECT id FROM mycat.myschema.mytable"
+        log = TransformLog()
+        out = apply_table_qualifier(sql, "AIQ", log)
+        assert "AIQ.mytable" in out
+        assert "mycat" not in out
+        assert "myschema" not in out
+        assert log.qualifier_rewritten is True
+
+    def test_replaces_schema_only(self):
+        from sql_process import apply_table_qualifier
+        sql = "SELECT id FROM myschema.mytable"
+        log = TransformLog()
+        out = apply_table_qualifier(sql, "AIQ", log)
+        assert "AIQ.mytable" in out
+        assert "myschema" not in out
+
+    def test_skips_bare_tables(self):
+        """Bare ``FROM customers`` (no qualifier) should NOT get one
+        added. Only existing qualifiers are replaced."""
+        from sql_process import apply_table_qualifier
+        sql = "SELECT id FROM customers"
+        log = TransformLog()
+        out = apply_table_qualifier(sql, "AIQ", log)
+        assert "AIQ" not in out
+        assert log.qualifier_rewritten is False
+
+    def test_skips_cte_references(self):
+        """CTE names defined in the query should not get rewritten,
+        even if they share names with imaginary base tables."""
+        from sql_process import apply_table_qualifier
+        sql = """
+        WITH foo AS (SELECT id FROM mycat.bar)
+        SELECT * FROM foo
+        """
+        log = TransformLog()
+        out = apply_table_qualifier(sql, "AIQ", log)
+        assert "AIQ.bar" in out
+        # `foo` is a CTE; it must not be rewritten as AIQ.foo.
+        assert "AIQ.foo" not in out
+
+    def test_empty_qualifier_is_noop(self):
+        from sql_process import apply_table_qualifier
+        sql = "SELECT id FROM mycat.t"
+        log = TransformLog()
+        out = apply_table_qualifier(sql, "", log)
+        assert out == sql
+        assert log.qualifier_rewritten is False
+
+
+class TestStripMetadataColumns:
+
+    def test_strips_from_projection(self):
+        from sql_process import strip_metadata_columns
+        sql = "SELECT id, snapshot_date, insert_dts, name FROM t"
+        log = TransformLog()
+        out = strip_metadata_columns(
+            sql, [], ["snapshot_date", "insert_dts"], log,
+        )
+        assert "snapshot_date" not in out
+        assert "insert_dts" not in out
+        assert "id" in out
+        assert "name" in out
+        assert log.metadata_columns_stripped is True
+
+    def test_strips_predicate_from_where(self):
+        from sql_process import strip_metadata_columns
+        sql = "SELECT id FROM t WHERE current_flag = 'Y' AND amount > 100"
+        log = TransformLog()
+        out = strip_metadata_columns(sql, [], ["current_flag"], log)
+        assert "current_flag" not in out
+        assert "amount > 100" in out
+
+    def test_drops_where_when_only_metadata(self):
+        """If all WHERE predicates touch metadata columns, the entire
+        WHERE clause is removed."""
+        from sql_process import strip_metadata_columns
+        sql = "SELECT id FROM t WHERE current_flag = 'Y' AND delete_flag = 'N'"
+        log = TransformLog()
+        out = strip_metadata_columns(
+            sql, [], ["current_flag", "delete_flag"], log,
+        )
+        assert "current_flag" not in out
+        assert "delete_flag" not in out
+        assert "WHERE" not in out.upper().split("FROM")[1]  # no WHERE after FROM
+
+    def test_empty_blacklist_is_noop(self):
+        from sql_process import strip_metadata_columns
+        sql = "SELECT id, snapshot_date FROM t"
+        log = TransformLog()
+        out = strip_metadata_columns(sql, [], [], log)
+        assert out == sql
+        assert log.metadata_columns_stripped is False
+
+
+class TestPreParseUnionSeparator:
+
+    def test_replaces_comma_with_union_all(self):
+        from sql_process import _pre_parse_union_separator
+        sql = "SELECT a FROM t1\n,\nSELECT a FROM t2"
+        out = _pre_parse_union_separator(sql, ",")
+        assert "UNION ALL" in out
+        assert out.count("UNION ALL") == 1
+
+    def test_multiple_unions(self):
+        from sql_process import _pre_parse_union_separator
+        sql = "SELECT a FROM t1\n,\nSELECT a FROM t2\n,\nSELECT a FROM t3"
+        out = _pre_parse_union_separator(sql, ",")
+        assert out.count("UNION ALL") == 2
+
+    def test_none_separator_disables(self):
+        from sql_process import _pre_parse_union_separator
+        sql = "SELECT a FROM t1\n,\nSELECT a FROM t2"
+        out = _pre_parse_union_separator(sql, None)
+        assert out == sql
+
+    def test_commas_inside_select_list_not_touched(self):
+        """Commas inside a SELECT list (between columns) must NOT
+        be rewritten as UNION ALL."""
+        from sql_process import _pre_parse_union_separator
+        sql = "SELECT a, b, c FROM t1"
+        out = _pre_parse_union_separator(sql, ",")
+        assert "UNION ALL" not in out
+
+
+class TestConfigLoader:
+
+    def test_load_default_config_picks_up_sibling_yaml(self):
+        """``load_config(None)`` auto-loads the script's sibling
+        ``sql_process.config.yaml`` when present, which is what the
+        CLI uses by default."""
+        from sql_process import load_config
+        cfg = load_config(None)
+        # The bundled config sets target_model_name=Converter.
+        assert cfg.movement.target_model_name == "Converter"
+        assert cfg.movement.source_model_name == "SSF"
+        assert cfg.optimize.table_qualifier == "schema_identifier_ssf_snapshot"
+
+    def test_load_config_with_explicit_path(self, tmp_path):
+        from sql_process import load_config
+        cfg_file = tmp_path / "test.yaml"
+        cfg_file.write_text(
+            "movement:\n"
+            "  target_model_name: MyTarget\n"
+            "  source_model_name: MySource\n"
+            "  granularity: table\n"
+            "outputs:\n"
+            "  bfm_mapping: true\n"
+            "optimize:\n"
+            "  table_qualifier: my_qualifier\n",
+            encoding="utf-8",
+        )
+        cfg = load_config(cfg_file)
+        assert cfg.movement.target_model_name == "MyTarget"
+        assert cfg.movement.source_model_name == "MySource"
+        assert cfg.movement.granularity == "table"
+        assert cfg.outputs.bfm_mapping is True
+        assert cfg.outputs.cte_mapping is False  # default kept
+        assert cfg.optimize.table_qualifier == "my_qualifier"
+
+    def test_missing_config_file_raises(self, tmp_path):
+        from sql_process import load_config
+        with pytest.raises(FileNotFoundError):
+            load_config(tmp_path / "does-not-exist.yaml")
+
+
+class TestMovementCsvNewBehaviour:
+
+    def test_source_version_from_filename(self):
+        """`<entity>-<role>-<version>.sql` -> source_version = version."""
+        from sql_process import _source_version
+        pf = _parsed_file("transactions-dim-v3.sql")
+        assert _source_version(pf) == "v3"
+
+    def test_source_version_empty_when_fewer_than_three_parts(self):
+        from sql_process import _source_version
+        pf = _parsed_file("transactions.sql")
+        assert _source_version(pf) == ""
+        pf2 = _parsed_file("transactions-dim.sql")
+        assert _source_version(pf2) == ""
 
 
 if __name__ == "__main__":

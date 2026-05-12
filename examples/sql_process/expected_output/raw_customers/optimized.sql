@@ -3,6 +3,17 @@
 -- @mdde-stereotype: src_raw
 -- @mdde-description: Raw customer landing from CRM
 
+/*
+Migration Details:
+- Original SQL File: raw_customers.sql
+- Target SQL File:  optimized.sql
+- Summary of Changes:
+  - Rewrote table qualifiers (catalog/schema) to the target qualifier.
+
+Validation Checklist:
+- [X] Table qualifiers normalised.
+*/
+
 /* @mdde-entity: raw_customers */ /* @mdde-layer: source */ /* @mdde-stereotype: src_raw */ /* @mdde-description: Raw customer landing from CRM */
 CREATE OR REPLACE VIEW raw_customers AS
 SELECT
@@ -13,6 +24,6 @@ SELECT
   phone, /* @pii @nullable */
   created_at,
   source_system
-FROM landing.crm_customers_export
+FROM schema_identifier_ssf_snapshot.crm_customers_export
 WHERE
   NOT _ingested_at IS NULL;

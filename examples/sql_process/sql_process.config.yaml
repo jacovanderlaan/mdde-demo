@@ -1,0 +1,118 @@
+# sql_process — pipeline configuration
+#
+# This file holds all defaults that were previously hard-coded at the
+# top of the script. Override any value by editing here, or by passing
+# the equivalent CLI flag (CLI takes precedence).
+#
+# The script auto-loads `sql_process.config.yaml` from its own folder.
+# Pass `--config <path>` to use a different file. Pass `--config none`
+# to disable config-file loading (relies on CLI flags + built-in
+# defaults).
+
+
+# =============================================================================
+# Movement CSV (customer-specific mapping export)
+# =============================================================================
+
+movement:
+  # Logical model the target belongs to. One value, used in every row.
+  target_model_name: Converter
+
+  # Default logical model for sources WITHOUT a schema qualifier.
+  # When a source table HAS a schema qualifier (`schema.table`),
+  # the row's source_model_name uses the schema name in UPPERCASE
+  # instead of this default.
+  source_model_name: SSF
+
+  # Default dependency strength. Overridden per-row to `loose` when
+  # the source is reached via a LEFT JOIN.
+  dependency_type: strict
+
+  # Granularity:
+  #   column  — one row per (target_column, source_column) pair (default)
+  #   table   — one row per source table (column names left empty)
+  granularity: column
+
+
+# =============================================================================
+# Output toggles
+# =============================================================================
+#
+# Each per-query folder always gets:  optimized.sql, findings.md,
+# genie.md, movement.csv. The three below are opt-in.
+
+outputs:
+  bfm_mapping: false           # mapping.bfm.yaml
+  cte_mapping: false           # mapping.cte.yaml
+  annotation_entity: false     # annotation.entity.yaml
+
+
+# =============================================================================
+# Customer rule pack
+# =============================================================================
+
+rules:
+  # Rule 1: Schema Replacement
+  # Legacy schemas to substitute. When empty, the rule is off.
+  legacy_schemas: []
+  #   Example: [bodm, csz, hz, cz]
+  replacement_schema: automatically_inferred_qualifier
+
+  # Rule 2: SCD2 Filtering
+  # Template variable name used in point-in-time predicates.
+  # Legacy `{reporting_date}` is auto-rewritten to this value.
+  date_variable: process_date
+
+  # Rule 3: Obsolete CTE blacklist
+  obsolete_cte_names:
+    - extract_dates
+    - create_timeline
+    - finalize_timeline
+
+  # Rule 4 / 13: Metadata columns excluded from outputs AND from
+  # WHERE predicates (the predicate is dropped from the WHERE; if
+  # nothing remains, the entire WHERE is removed).
+  metadata_blacklist:
+    - snapshot_date
+    - insert_dts
+    - update_dts
+    - current_flag
+    - delete_flag
+    - delta_flag
+    - create_timestamp
+    - start_dts
+    - end_dts
+
+
+# =============================================================================
+# Optimized-SQL rewriting
+# =============================================================================
+
+optimize:
+  # Replace catalog.schema qualifiers on every FROM/JOIN table with
+  # this single qualifier. When null/empty, no rewrite happens.
+  table_qualifier: schema_identifier_ssf_snapshot
+
+  # Pre-parse: replace comma between top-level SELECT statements
+  # with UNION ALL. Set to null to disable.
+  # Currently supports: "," (commas at the start of a SELECT line).
+  union_separator: ","
+
+
+# =============================================================================
+# File selection (recursive mode)
+# =============================================================================
+#
+# Glob patterns relative to the input directory. When `include` is
+# empty, every `*.sql` file is included. `exclude` is applied after
+# `include`.
+
+files:
+  include: []
+  #   Example:
+  #     - "staging/**/*.sql"
+  #     - "marts/dim_*.sql"
+  exclude: []
+  #   Example:
+  #     - "**/_*.sql"        # skip files starting with underscore
+  #     - "**/scratch/**"    # skip scratch folder

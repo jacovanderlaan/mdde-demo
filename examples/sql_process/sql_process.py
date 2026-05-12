@@ -301,9 +301,43 @@ class ParsedFile:
     qualify_error: Optional[str] = None      # Reason qualify() was skipped
 
 
+def _pre_parse_union_separator(sql: str, separator: Optional[str]) -> str:
+    """Replace the customer's UNION-ALL-by-comma convention with
+    explicit UNION ALL before parsing.
+
+    The customer site writes UNION ALL between multiple SELECT
+    statements as a comma at the start of a SELECT line, e.g.::
+
+        SELECT a, b, c FROM t1
+        ,
+        SELECT a, b, c FROM t2
+
+    sqlglot can't parse that. This pre-pass replaces each
+    standalone comma between two SELECTs with ``UNION ALL``.
+
+    ``separator`` is the configurable token; only ``","`` is
+    supported today. Returns the input unchanged when separator is
+    None/empty or the pattern doesn't match.
+    """
+    if not separator or separator != ",":
+        return sql
+    # Match: end of statement (comma/newline) followed by optional
+    # whitespace, then a newline, then optional whitespace and a
+    # standalone comma alone on its line, then optional whitespace
+    # and the keyword SELECT. Replace the bare comma with UNION ALL.
+    # Conservative pattern: only fires when the line is just a comma
+    # surrounded by whitespace, between two SELECTs.
+    pattern = re.compile(
+        r"(\n[ \t]*)(,)(\s*\n[ \t]*)(?=SELECT\b)",
+        re.IGNORECASE,
+    )
+    return pattern.sub(r"\1UNION ALL\3", sql)
+
+
 def parse_file(
     path: Path,
     metadata: Optional[MetadataSchema] = None,
+    union_separator: Optional[str] = None,
 ) -> ParsedFile:
     """Read a SQL file, extract annotations, parse with sqlglot.
 
@@ -313,8 +347,15 @@ def parse_file(
     and validates that referenced columns exist. On failure (e.g.
     ambiguous columns, columns not in the schema), falls back to
     the unqualified AST and records the reason in ``qualify_error``.
+
+    ``union_separator`` (e.g., ``","``) triggers a pre-parse step
+    that replaces the customer's UNION-ALL-by-comma convention with
+    explicit ``UNION ALL`` keywords. See
+    ``_pre_parse_union_separator``.
     """
     raw_sql = path.read_text(encoding="utf-8")
+    if union_separator:
+        raw_sql = _pre_parse_union_separator(raw_sql, union_separator)
     annotations = extract_annotations(raw_sql)
     entity_name = annotations.entity.get("entity") or path.stem
 
@@ -534,6 +575,21 @@ def run_quality_checks(
             ),
             message=diag.message,
         ))
+
+    # File-level check: source_version is the 3rd hyphen-separated
+    # part of the filename stem. Emit an info finding when the
+    # filename has fewer than 3 parts.
+    if len(pf.path.stem.split("-")) < 3:
+        findings.append(QualityFinding(
+            rule="MISSING_SOURCE_VERSION",
+            severity="info",
+            location="<file>",
+            message=(
+                f"Filename '{pf.path.name}' has fewer than 3 hyphen-separated "
+                f"parts; movement.csv source_version will be empty"
+            ),
+        ))
+
     return findings
 
 
@@ -1206,8 +1262,11 @@ class TransformLog:
     obsolete_ctes_removed: bool = False
     legacy_date_replaced: bool = False
     where_true_removed: bool = False
+    qualifier_rewritten: bool = False
+    metadata_columns_stripped: bool = False
     schema_replacements: List[Tuple[str, str]] = field(default_factory=list)
     obsolete_cte_names: List[str] = field(default_factory=list)
+    stripped_metadata_columns: List[str] = field(default_factory=list)
 
 
 def apply_schema_replacement(
@@ -1388,6 +1447,182 @@ def remove_obsolete_ctes(
         return sql
 
 
+def apply_table_qualifier(
+    sql: str,
+    qualifier: str,
+    log: TransformLog,
+    cte_names: Optional[Set[str]] = None,
+) -> str:
+    """Rewrite every base-table reference in the SQL to use the given
+    qualifier in place of its original catalog/schema.
+
+    ``catalog.schema.table`` -> ``<qualifier>.table``
+    ``schema.table``         -> ``<qualifier>.table``
+    Bare ``table`` references are left untouched (no qualifier added).
+
+    CTE references are NOT rewritten — only base tables. Pass the
+    set of CTE names defined in the same query so the rewrite skips
+    them. When ``cte_names`` is None, the helper discovers them by
+    walking the AST itself.
+    """
+    if not qualifier:
+        return sql
+    try:
+        statements = sqlglot.parse(sql, read=None)
+    except sqlglot.errors.ParseError:
+        return sql
+    if not statements or statements[0] is None:
+        return sql
+
+    rewritten = False
+    for stmt in statements:
+        if stmt is None:
+            continue
+        local_ctes = (
+            cte_names
+            if cte_names is not None
+            else {c.alias_or_name for c in stmt.find_all(exp.CTE)}
+        )
+        for tbl in stmt.find_all(exp.Table):
+            name = tbl.name
+            if not name or name in local_ctes:
+                continue
+            db = tbl.args.get("db")
+            catalog = tbl.args.get("catalog")
+            # Only rewrite when there's an existing qualifier to replace.
+            if db is None and catalog is None:
+                continue
+            tbl.set("db", exp.to_identifier(qualifier))
+            tbl.set("catalog", None)
+            rewritten = True
+
+    if not rewritten:
+        return sql
+
+    log.qualifier_rewritten = True
+
+    try:
+        rendered = "\n".join(s.sql(pretty=True) for s in statements if s is not None)
+        if sql.rstrip().endswith(";") and not rendered.rstrip().endswith(";"):
+            rendered = rendered.rstrip() + ";"
+        return rendered
+    except Exception:  # noqa: BLE001 — fail-soft
+        return sql
+
+
+def strip_metadata_columns(
+    sql: str,
+    findings: List[QualityFinding],
+    metadata_blacklist: List[str],
+    log: TransformLog,
+) -> str:
+    """Rule 4 / 13: remove blacklisted metadata columns from
+    every SELECT's projections, and remove any WHERE predicate
+    that compares one of these columns. If the WHERE ends up
+    empty, drop it entirely.
+
+    Conservative: only strips exact name matches from projections
+    and only strips equality / comparison / IS-NULL predicates from
+    WHERE where one operand is a bare metadata column.
+    """
+    if not metadata_blacklist:
+        return sql
+    try:
+        statements = sqlglot.parse(sql, read=None)
+    except sqlglot.errors.ParseError:
+        return sql
+    if not statements or statements[0] is None:
+        return sql
+
+    blacklist = {b.lower() for b in metadata_blacklist}
+    stripped_columns: Set[str] = set()
+
+    def _matches_metadata(node: exp.Expression) -> Optional[str]:
+        """Return the metadata-column name if ``node`` is a bare
+        Column reference to one. Else None."""
+        col = node
+        if isinstance(col, exp.Alias):
+            col = col.this
+        if isinstance(col, exp.Column) and col.name.lower() in blacklist:
+            return col.name
+        return None
+
+    def _predicate_touches_metadata(pred: exp.Expression) -> Optional[str]:
+        """Return the metadata column name if a leaf predicate
+        references one (in either operand or via IS [NOT] NULL)."""
+        if isinstance(pred, (exp.EQ, exp.NEQ, exp.GT, exp.GTE, exp.LT, exp.LTE, exp.Like, exp.In)):
+            for child in (pred.this, pred.args.get("expression")):
+                m = _matches_metadata(child) if child is not None else None
+                if m:
+                    return m
+        if isinstance(pred, exp.Is):
+            m = _matches_metadata(pred.this)
+            if m:
+                return m
+        return None
+
+    for stmt in statements:
+        if stmt is None:
+            continue
+        # 1. Strip metadata-column projections from every SELECT.
+        for select in list(stmt.find_all(exp.Select)):
+            kept_projections: List[exp.Expression] = []
+            for proj in select.expressions:
+                m = _matches_metadata(proj)
+                if m is not None:
+                    stripped_columns.add(m)
+                    continue
+                kept_projections.append(proj)
+            if kept_projections != list(select.expressions):
+                if not kept_projections:
+                    # Don't produce a SELECT with zero projections —
+                    # leave at least one column in place. Restore the
+                    # last metadata projection so the SELECT stays valid.
+                    kept_projections = [select.expressions[-1]]
+                    stripped_columns.discard(
+                        _matches_metadata(select.expressions[-1]) or ""
+                    )
+                select.set("expressions", kept_projections)
+
+            # 2. Strip metadata-column predicates from WHERE.
+            where = select.args.get("where")
+            if where is None:
+                continue
+            parts = _split_and(where.this) if where.this is not None else []
+            kept_parts = []
+            for p in parts:
+                m = _predicate_touches_metadata(p)
+                if m is not None:
+                    stripped_columns.add(m)
+                    continue
+                kept_parts.append(p)
+            if len(kept_parts) == len(parts):
+                continue  # nothing changed in this WHERE
+            new_where = _rebuild_and(kept_parts)
+            if new_where is None:
+                # All predicates were metadata-only — drop WHERE entirely.
+                select.set("where", None)
+            else:
+                where.set("this", new_where)
+
+    if not stripped_columns:
+        return sql
+
+    log.metadata_columns_stripped = True
+    log.stripped_metadata_columns = sorted(stripped_columns)
+    for f in findings:
+        if f.rule == "METADATA_COLUMN_EXPOSED":
+            f.auto_fixed = True
+
+    try:
+        rendered = "\n".join(s.sql(pretty=True) for s in statements if s is not None)
+        if sql.rstrip().endswith(";") and not rendered.rstrip().endswith(";"):
+            rendered = rendered.rstrip() + ";"
+        return rendered
+    except Exception:  # noqa: BLE001 — fail-soft
+        return sql
+
+
 def emit_comment_header(
     pf: ParsedFile,
     log: TransformLog,
@@ -1436,6 +1671,22 @@ def emit_comment_header(
             summary.append("  - Removed obsolete timeline-related CTEs.")
         checklist.append("- [X] Obsolete logic removed.")
 
+    if log.metadata_columns_stripped:
+        if log.stripped_metadata_columns:
+            cols = ", ".join(f"`{c}`" for c in log.stripped_metadata_columns)
+            summary.append(
+                f"  - Excluded metadata columns from outputs and WHERE ({cols})."
+            )
+        else:
+            summary.append("  - Excluded metadata columns from outputs and WHERE.")
+        checklist.append("- [X] Metadata columns excluded.")
+
+    if log.qualifier_rewritten:
+        summary.append(
+            "  - Rewrote table qualifiers (catalog/schema) to the target qualifier."
+        )
+        checklist.append("- [X] Table qualifiers normalised.")
+
     if log.where_true_removed:
         summary.append("  - Removed `WHERE 1=1` placeholder.")
 
@@ -1463,6 +1714,7 @@ def apply_auto_fixes(
     sql: str,
     findings: List[QualityFinding],
     customer_config: Optional["CustomerRuleConfig"] = None,
+    optimize_config: Optional["OptimizeConfig"] = None,
     detection_only: bool = False,
 ) -> Tuple[str, List[QualityFinding], TransformLog]:
     """Rewrite the SQL to fix the safe issues. Mutates findings in
@@ -1479,6 +1731,7 @@ def apply_auto_fixes(
     out = sql
     log = TransformLog()
     cfg = customer_config or CustomerRuleConfig()
+    opt = optimize_config or OptimizeConfig()
 
     if not detection_only:
         for f in findings:
@@ -1502,6 +1755,10 @@ def apply_auto_fixes(
         # Customer rule 3: obsolete-CTE removal.
         out = remove_obsolete_ctes(out, findings, cfg.obsolete_cte_names, log)
 
+        # Customer rule 4 / 13: strip metadata columns from SELECT
+        # projections AND from WHERE predicates.
+        out = strip_metadata_columns(out, findings, cfg.metadata_blacklist, log)
+
         # Lift inline subqueries into named CTEs (in-scope shapes only).
         # Done before format-normalisation so the final pretty-print covers
         # the rewritten AST in one pass.
@@ -1517,6 +1774,13 @@ def apply_auto_fixes(
         out, findings = push_projections_to_source_ctes(out, findings)
         if out != before:
             log.projections_pushed = True
+
+        # Customer rule 7 (qualifier rewrite): replace catalog/schema
+        # on every base-table reference with the configured qualifier.
+        # Runs last so it picks up tables introduced by earlier
+        # transforms (e.g., schema-replacement).
+        if opt.table_qualifier:
+            out = apply_table_qualifier(out, opt.table_qualifier, log)
 
     # Format-normalise via sqlglot. Preserves semantics; produces
     # consistent indentation across all output files. Runs even in
@@ -1704,105 +1968,180 @@ def _humanise_predicate(node: exp.Expression) -> str:
     return _unquoted_sql(node)
 
 
-def emit_genie_prompt(pf: ParsedFile) -> str:
-    """Build a concise Genie prompt from the ORIGINAL parsed query.
+def emit_genie_prompt(
+    pf: ParsedFile,
+    customer_config: Optional["CustomerRuleConfig"] = None,
+    optimize_config: Optional["OptimizeConfig"] = None,
+) -> str:
+    """Build a Genie instruction block the user can paste **above**
+    the original query in a Genie prompt window.
 
-    The output is one self-contained markdown block — no metadata,
-    no headers Genie would have to skip past. Just the instructions
-    needed to reproduce the query's result.
+    The output is NOT a description of the query — it's a set of
+    instructions Genie should apply to optimise/migrate that query.
+    Contains the customer's rule pack distilled to actionable
+    guidance, scoped only to what's relevant for the file at hand.
     """
-    if pf.parsed is None:
-        return f"Reproduce the SQL output for `{pf.entity_name}`.\n"
-
-    # Find the outermost SELECT (after any CTEs).
-    outer = _outermost_select(pf.parsed)
-    if outer is None:
-        return f"Reproduce the SQL output for `{pf.entity_name}`.\n"
+    cfg = customer_config or CustomerRuleConfig()
+    opt = optimize_config or OptimizeConfig()
 
     lines: List[str] = []
-
-    # 1. Goal line.
-    target = pf.entity_name
-    lines.append(f"Produce a result set equivalent to `{target}`.")
+    lines.append("# Genie instructions")
+    lines.append("")
+    lines.append(
+        "Apply the following SQL migration and optimisation rules to "
+        "the query below. Produce a single rewritten query plus a "
+        "short summary of what changed."
+    )
     lines.append("")
 
-    # 2. Source tables (unique, in encounter order).
-    if pf.source_tables:
-        lines.append("Sources:")
-        for src in pf.source_tables:
-            lines.append(f"- `{src}`")
-        lines.append("")
+    # Workflow ordering matches CUSTOMER_RULES.md.
+    n = 0
 
-    # 3. Joins (only when non-trivial).
-    joins = outer.args.get("joins") or []
-    if joins:
-        lines.append("Joins:")
-        for j in joins:
-            kind = (j.args.get("kind") or "").upper()
-            side = (j.args.get("side") or "").upper()
-            jt = " ".join(p for p in (side, kind, "JOIN") if p)
-            target_tbl = _unquoted_sql(j.this) if j.this else "?"
-            on = j.args.get("on")
-            if on is not None:
-                lines.append(f"- {jt} `{target_tbl}` on `{_unquoted_sql(on)}`")
-            elif j.args.get("using"):
-                using_cols = ", ".join(_unquoted_sql(u) for u in j.args["using"])
-                lines.append(f"- {jt} `{target_tbl}` using ({using_cols})")
-            else:
-                lines.append(f"- {jt} `{target_tbl}`")
-        lines.append("")
+    # 1. Schema replacement (only when configured).
+    if cfg.legacy_schemas:
+        n += 1
+        legacy = ", ".join(f"`{s}`" for s in cfg.legacy_schemas)
+        lines.append(
+            f"{n}. **Schema Replacement** — replace legacy schemas "
+            f"({legacy}) with `{cfg.replacement_schema}` on every "
+            f"table reference."
+        )
 
-    # 4. Filters (split AND-tree into bullets).
-    where = outer.args.get("where")
-    if where is not None and where.this is not None:
-        parts = _split_and(where.this)
-        lines.append("Filters:")
-        for p in parts:
-            lines.append(f"- {_humanise_predicate(p)}")
-        lines.append("")
+    # 2. SCD2 filtering (always relevant).
+    n += 1
+    lines.append(
+        f"{n}. **SCD2 Filtering** — every source table CTE must "
+        f"apply point-in-time filtering:"
+    )
+    lines.append("   ```sql")
+    lines.append(f"   WHERE CAST('{{{cfg.date_variable}}}' AS DATE) >= _valid_from")
+    lines.append(
+        f"     AND CAST('{{{cfg.date_variable}}}' AS DATE) <  "
+        f"COALESCE(_valid_to, CAST('9999-12-31' AS DATE))"
+    )
+    lines.append("   ```")
+    lines.append(
+        "   Use the variable above; do **not** use `BETWEEN`. "
+        "Replace any legacy `{reporting_date}` references with "
+        f"`{{{cfg.date_variable}}}`."
+    )
 
-    # 5. Group by / aggregation hint.
-    group = outer.args.get("group")
-    if group is not None:
-        group_cols = ", ".join(_unquoted_sql(g) for g in group.expressions)
-        lines.append(f"Group by: {group_cols}")
-        lines.append("")
+    # 3. Remove obsolete logic.
+    if cfg.obsolete_cte_names:
+        n += 1
+        obs = ", ".join(f"`{c}`" for c in cfg.obsolete_cte_names)
+        lines.append(
+            f"{n}. **Remove Obsolete Logic** — delete CTEs named "
+            f"{obs} and update downstream references. Replace any "
+            f"`snapshot_date` filtering with the SCD2 predicate above."
+        )
 
-    # 6. Output columns (with renames + derivations spelled out).
-    lines.append("Return columns:")
-    for proj in outer.expressions:
-        if isinstance(proj, exp.Star):
-            lines.append("- all columns")
-            continue
-        if isinstance(proj, exp.Alias):
-            inner_desc = _humanise_expression(proj.this)
-            lines.append(f"- `{proj.alias}` = {inner_desc}")
-        elif isinstance(proj, exp.Column):
-            lines.append(f"- `{proj.name}` from {_column_label(proj)}")
-        else:
-            lines.append(f"- {_unquoted_sql(proj)}")
+    # 4. Exclude metadata columns.
+    if cfg.metadata_blacklist:
+        n += 1
+        meta = ", ".join(f"`{c}`" for c in cfg.metadata_blacklist)
+        lines.append(
+            f"{n}. **Exclude Metadata Columns** — never project "
+            f"{meta} in CTE outputs or the final SELECT. Drop any "
+            "WHERE predicate that references these columns; if the "
+            "WHERE becomes empty, remove it. Retain `_valid_from` / "
+            "`_valid_to` ONLY in the WHERE clause of initial source "
+            "CTEs."
+        )
+
+    # 5. Joins.
+    n += 1
+    lines.append(
+        f"{n}. **Optimize Joins** — remove `LEFT JOIN`s that "
+        "contribute no columns to the final result. Pre-process any "
+        "join-key transformations in source CTEs (no inline `CAST`, "
+        "function call, or literal inside JOIN `ON` clauses)."
+    )
+
+    # 6. Explicit column selection.
+    n += 1
+    lines.append(
+        f"{n}. **Explicit Column Selection** — replace every "
+        "`SELECT *` with an explicit column list. Only project the "
+        "columns the downstream consumer needs."
+    )
+
+    # 7. Modular query design.
+    n += 1
+    lines.append(
+        f"{n}. **Modular Query Design** — structure the rewrite as "
+        "logical CTEs in three tiers:"
+    )
+    lines.append(
+        "   - **Preparation CTEs** named `<source_table>_filtered` "
+        "(filter + SCD2 predicate per source)."
+    )
+    lines.append(
+        "   - **Transformation CTEs** named for their purpose "
+        "(`transformed_data`, `combined_data`, `aggregated_data`, "
+        "`ranked_customers`, etc.). Push column derivations to the "
+        "earliest CTE where all required fields are available. "
+        "`GROUP BY` belongs in its own dedicated CTE."
+    )
+    lines.append(
+        "   - **Final SELECT** — selects pre-prepared fields only; "
+        "no derivations, no filtering, no joins."
+    )
+
+    # 8. UNION ALL purity + source tagging.
+    n += 1
+    lines.append(
+        f"{n}. **UNION ALL Purity** — when combining datasets, do "
+        "all transformations in per-source CTEs first. The UNION "
+        "ALL block must only concatenate prepared, schema-aligned "
+        "datasets (no casts, no filters, no expressions inside the "
+        "UNION). Each branch must add a string-literal column "
+        "identifying the originating source "
+        "(e.g., `'A_SOURCE' AS source_ind`)."
+    )
+
+    # 9. Avoid DISTINCT.
+    n += 1
+    lines.append(
+        f"{n}. **Avoid DISTINCT** — use explicit deduplication via "
+        "`ROW_NUMBER() OVER (PARTITION BY <pk> ORDER BY <tie>)` "
+        "instead of `DISTINCT`. If `DISTINCT` is unavoidable, add a "
+        "comment justifying why."
+    )
+
+    # 10. Table qualifier rewrite.
+    if opt.table_qualifier:
+        n += 1
+        lines.append(
+            f"{n}. **Table Qualifier** — every base table reference "
+            f"in the rewrite must use the qualifier "
+            f"`{opt.table_qualifier}` in place of its original "
+            "catalog/schema (e.g., `catalog.schema.t` -> "
+            f"`{opt.table_qualifier}.t`)."
+        )
+
+    # 11. FULL OUTER replacement.
+    n += 1
+    lines.append(
+        f"{n}. **Replace FULL OUTER JOIN + COALESCE** — restructure "
+        "as three CTEs: `unique_rows_from_<a>` (LEFT JOIN + IS NULL), "
+        "`unique_rows_from_<b>` (reverse direction), `matching_rows` "
+        "(INNER JOIN), then `UNION ALL` the three. Each branch adds "
+        "a source-tagging column."
+    )
+
+    # 12. Comment header.
+    n += 1
+    lines.append(
+        f"{n}. **Comment Header** — prepend a `/* Migration Details "
+        "... */` block to the rewrite, listing the rules applied and "
+        "an `[X]` validation checklist."
+    )
+
     lines.append("")
-
-    # 7. Sort.
-    order = outer.args.get("order")
-    if order is not None:
-        order_cols = []
-        for o in order.expressions:
-            direction = "DESC" if o.args.get("desc") else "ASC"
-            order_cols.append(f"{_unquoted_sql(o.this)} {direction}")
-        lines.append(f"Sort: {', '.join(order_cols)}")
-        lines.append("")
-
-    # 8. Limit.
-    limit = outer.args.get("limit")
-    if limit is not None:
-        limit_expr = limit.expression if limit.expression else limit
-        lines.append(f"Limit: {_unquoted_sql(limit_expr)}")
-        lines.append("")
-
-    # Trim trailing blank line.
-    while lines and lines[-1] == "":
-        lines.pop()
+    lines.append("---")
+    lines.append("Original query follows.")
+    lines.append("")
     return "\n".join(lines) + "\n"
 
 
@@ -1831,6 +2170,7 @@ MOVEMENT_CSV_HEADER = [
     "derived_indicator",
     "movement_expression",
     "dependency_type",
+    "source_version",
 ]
 
 
@@ -1838,27 +2178,18 @@ MOVEMENT_CSV_HEADER = [
 class MovementConfig:
     """Customer-overridable values for movement.csv.
 
-    The three knobs the customer site asked to control: which logical
-    model the target belongs to, which model the sources belong to,
-    and what dependency strength to declare. Defaults match the
-    customer's current spreadsheet.
+    Defaults align with the customer's current spreadsheet shape.
+    Override via ``sql_process.config.yaml`` or CLI flags.
     """
-    target_model_name: str = "SSF"
-    source_model_name: str = "SSF_SOURCE"
+    target_model_name: str = "Converter"
+    source_model_name: str = "SSF"          # default when source has no schema
     dependency_type: str = "strict"
+    granularity: str = "column"              # "column" | "table"
 
 
 @dataclass
 class CustomerRuleConfig:
-    """Customer-overridable values for the migration rule pack.
-
-    All four knobs are optional. ``legacy_schemas`` defaults to empty
-    (so schema replacement is off by default; the customer opts in via
-    CLI). ``date_variable`` defaults to ``process_date`` per the
-    customer's master rule pack. ``metadata_blacklist`` defaults to
-    the customer's published 9-column list. ``obsolete_cte_names``
-    defaults to the customer's published 3-CTE blacklist.
-    """
+    """Customer-overridable values for the migration rule pack."""
     legacy_schemas: List[str] = field(default_factory=list)
     replacement_schema: str = "automatically_inferred_qualifier"
     date_variable: str = "process_date"
@@ -1881,6 +2212,135 @@ class CustomerRuleConfig:
         }
 
 
+@dataclass
+class OutputConfig:
+    """Toggles for the optional per-query artefacts.
+
+    Always emitted: optimized.sql, findings.md, genie.md, movement.csv.
+    Optional: bfm_mapping (mapping.bfm.yaml), cte_mapping
+    (mapping.cte.yaml), annotation_entity (annotation.entity.yaml).
+    """
+    bfm_mapping: bool = False
+    cte_mapping: bool = False
+    annotation_entity: bool = False
+
+
+@dataclass
+class OptimizeConfig:
+    """Optimization knobs.
+
+    ``table_qualifier`` rewrites every base-table reference in the
+    optimized SQL to use this single qualifier instead of the
+    original catalog/schema. Set to None or "" to skip.
+
+    ``union_separator`` is a pre-parse substitution: when the input
+    SQL uses a comma between top-level SELECTs to mean UNION ALL,
+    this tells the script to convert each occurrence before parsing.
+    """
+    table_qualifier: Optional[str] = "schema_identifier_ssf_snapshot"
+    union_separator: Optional[str] = ","
+
+
+@dataclass
+class FileConfig:
+    """Glob include/exclude patterns relative to the input directory.
+
+    When ``include`` is empty, every ``*.sql`` file under the input
+    directory is processed (subject to the ``--recursive`` flag).
+    ``exclude`` is applied after include.
+    """
+    include: List[str] = field(default_factory=list)
+    exclude: List[str] = field(default_factory=list)
+
+
+@dataclass
+class PipelineConfig:
+    """Top-level container for all configurable values.
+
+    Loaded from ``sql_process.config.yaml`` (sibling of this script
+    by default). CLI flags can override individual values after load.
+    """
+    movement: MovementConfig = field(default_factory=MovementConfig)
+    rules: CustomerRuleConfig = field(default_factory=CustomerRuleConfig)
+    outputs: OutputConfig = field(default_factory=OutputConfig)
+    optimize: OptimizeConfig = field(default_factory=OptimizeConfig)
+    files: FileConfig = field(default_factory=FileConfig)
+
+
+def load_config(path: Optional[Path]) -> PipelineConfig:
+    """Load the pipeline configuration.
+
+    Lookup order:
+      1. Explicit ``path`` argument (when not None)
+      2. ``<script_dir>/sql_process.config.yaml`` if it exists
+      3. Built-in defaults (empty PipelineConfig)
+
+    Missing keys at any level fall back to the dataclass defaults,
+    so a partial config file is fine.
+    """
+    cfg_path: Optional[Path] = None
+    if path is not None:
+        if not path.is_file():
+            raise FileNotFoundError(f"Config file not found: {path}")
+        cfg_path = path
+    else:
+        script_dir = Path(__file__).parent if "__file__" in globals() else Path.cwd()
+        candidate = script_dir / "sql_process.config.yaml"
+        if candidate.is_file():
+            cfg_path = candidate
+
+    if cfg_path is None:
+        return PipelineConfig()
+
+    with open(cfg_path, "r", encoding="utf-8") as f:
+        raw = yaml.safe_load(f) or {}
+
+    cfg = PipelineConfig()
+
+    mv = raw.get("movement") or {}
+    if mv:
+        cfg.movement = MovementConfig(
+            target_model_name=str(mv.get("target_model_name", cfg.movement.target_model_name)),
+            source_model_name=str(mv.get("source_model_name", cfg.movement.source_model_name)),
+            dependency_type=str(mv.get("dependency_type", cfg.movement.dependency_type)),
+            granularity=str(mv.get("granularity", cfg.movement.granularity)),
+        )
+
+    rl = raw.get("rules") or {}
+    if rl:
+        cfg.rules = CustomerRuleConfig(
+            legacy_schemas=list(rl.get("legacy_schemas") or []),
+            replacement_schema=str(rl.get("replacement_schema", cfg.rules.replacement_schema)),
+            date_variable=str(rl.get("date_variable", cfg.rules.date_variable)),
+            metadata_blacklist=list(rl.get("metadata_blacklist") or cfg.rules.metadata_blacklist),
+            obsolete_cte_names=list(rl.get("obsolete_cte_names") or cfg.rules.obsolete_cte_names),
+        )
+
+    outs = raw.get("outputs") or {}
+    if outs:
+        cfg.outputs = OutputConfig(
+            bfm_mapping=bool(outs.get("bfm_mapping", cfg.outputs.bfm_mapping)),
+            cte_mapping=bool(outs.get("cte_mapping", cfg.outputs.cte_mapping)),
+            annotation_entity=bool(outs.get("annotation_entity", cfg.outputs.annotation_entity)),
+        )
+
+    op = raw.get("optimize") or {}
+    if op:
+        cfg.optimize = OptimizeConfig(
+            table_qualifier=op.get("table_qualifier") or None,
+            union_separator=op.get("union_separator") or None,
+        )
+
+    fl = raw.get("files") or {}
+    if fl:
+        cfg.files = FileConfig(
+            include=list(fl.get("include") or []),
+            exclude=list(fl.get("exclude") or []),
+        )
+
+    return cfg
+
+
 def _target_table_name(pf: ParsedFile) -> str:
     """Derive ``target_table_name`` from the input filename.
 
@@ -1895,43 +2355,86 @@ def _target_table_name(pf: ParsedFile) -> str:
     return stem
 
 
-def _resolve_source_table(
-    alias_or_name: str,
-    alias_map: Dict[str, str],
-) -> str:
-    """Resolve a FROM-side alias to the underlying table name."""
-    if not alias_or_name:
-        return ""
-    return alias_map.get(alias_or_name, alias_or_name)
+def _source_version(pf: ParsedFile) -> str:
+    """Return the 3rd hyphen-separated part of the filename stem.
 
-
-def _build_alias_map(pf: ParsedFile) -> Dict[str, str]:
-    """Build an ``alias -> source_table`` map by walking the parsed
-    AST. Used to resolve qualified column refs (``c.email``) back to
-    their table (``stg_customers``).
-
-    Falls back to identity (alias -> alias) when the alias is itself
-    a base-table name without a separate alias clause.
+    Convention: SQL filenames follow ``<entity>-<role>-<version>.sql``.
+    When the filename has fewer than three hyphen-separated parts,
+    returns the empty string. Callers should emit a
+    ``MISSING_SOURCE_VERSION`` finding when they want the user to
+    notice.
     """
-    out: Dict[str, str] = {}
+    parts = pf.path.stem.split("-")
+    if len(parts) >= 3:
+        return parts[2]
+    return ""
+
+
+@dataclass
+class SourceInfo:
+    """Per-source metadata used to populate movement.csv rows.
+
+    The bare table name (with catalog/schema stripped) becomes
+    ``source_table_name``; the schema (uppercased) becomes
+    ``source_model_name`` when present; ``left_join`` controls the
+    per-row ``dependency_type`` (``loose`` vs the config default).
+    """
+    table_name: str
+    schema: Optional[str] = None
+    catalog: Optional[str] = None
+    left_join: bool = False
+
+
+def _build_source_info_map(pf: ParsedFile) -> Dict[str, SourceInfo]:
+    """Build an ``alias -> SourceInfo`` map by walking the parsed AST.
+
+    Records each base table's schema (if present) and whether the
+    table was reached via a LEFT JOIN — both needed by the movement
+    CSV emitter to populate the new columns.
+    """
+    out: Dict[str, SourceInfo] = {}
     if pf.parsed is None:
         return out
+    # Walk all Tables and record name/schema/catalog.
     for tbl in pf.parsed.find_all(exp.Table):
         name = tbl.name
         if not name:
             continue
         alias = tbl.alias or name
-        # Build qualified name when schema/catalog is present (so the
-        # CSV row carries the same qualified name the rest of the
-        # pipeline does).
-        parts: List[str] = []
-        if tbl.args.get("catalog"):
-            parts.append(tbl.args["catalog"].name)
-        if tbl.args.get("db"):
-            parts.append(tbl.args["db"].name)
-        parts.append(name)
-        out[alias] = ".".join(parts)
+        schema = tbl.args.get("db").name if tbl.args.get("db") else None
+        catalog = tbl.args.get("catalog").name if tbl.args.get("catalog") else None
+        out[alias] = SourceInfo(
+            table_name=name,
+            schema=schema,
+            catalog=catalog,
+        )
+    # Walk Joins and flip the left_join flag for matching aliases.
+    for join in pf.parsed.find_all(exp.Join):
+        side = (join.args.get("side") or "").upper()
+        if side != "LEFT":
+            continue
+        join_tbl = join.this if isinstance(join.this, exp.Table) else None
+        if join_tbl is None:
+            continue
+        alias = join_tbl.alias or join_tbl.name
+        info = out.get(alias)
+        if info is not None:
+            info.left_join = True
     return out
+
+
+def _resolve_source_info(
+    alias_or_name: str,
+    info_map: Dict[str, SourceInfo],
+) -> SourceInfo:
+    """Resolve a column reference's table qualifier to its SourceInfo.
+
+    Falls back to a bare SourceInfo when the alias isn't in the map
+    (typical for column refs into CTEs the lineage extractor can't
+    fully resolve)."""
+    if alias_or_name and alias_or_name in info_map:
+        return info_map[alias_or_name]
+    return SourceInfo(table_name=alias_or_name or "")
 
 
 def _is_derived_lineage(lin: ColumnLineage) -> bool:
@@ -1970,38 +2473,99 @@ def _clean_movement_expression(expr_sql: str) -> str:
 def emit_movement_csv_rows(
     pf: ParsedFile,
     config: MovementConfig,
+    metadata_blacklist: Optional[List[str]] = None,
 ) -> List[List[str]]:
     """Build the per-query movement.csv rows for ``pf``.
 
-    One row per ``(target_column, source_column)`` pair from the
-    lineage extraction, plus one row per join-only source table
-    (a table referenced in FROM/JOIN but contributing no projection).
+    ``metadata_blacklist`` (when provided) filters out lineage entries
+    whose target column matches a blacklisted metadata column —
+    keeps the CSV in sync with the optimised SQL after
+    ``strip_metadata_columns`` ran.
+
+    Behaviour:
+      - One row per ``(target_column, source_column)`` pair from the
+        lineage extraction (column-level granularity, default), OR
+      - One row per source table when ``config.granularity == "table"``
+        (column slots empty, no expression)
+      - Plus one row per join-only source table (referenced in
+        FROM/JOIN but contributing no projection).
+      - ``source_table_name`` strips catalog/schema.
+      - ``source_model_name`` per-row: UPPER(schema) when the source
+        table carries a schema; falls back to ``config.source_model_name``.
+      - ``dependency_type`` per-row: ``loose`` when the source is
+        reached via LEFT JOIN; otherwise ``config.dependency_type``.
+      - ``source_version`` from the 3rd hyphen-part of the filename.
     """
     rows: List[List[str]] = []
     target_table = _target_table_name(pf)
-    alias_map = _build_alias_map(pf)
+    source_version = _source_version(pf)
+    info_map = _build_source_info_map(pf)
+    excluded_columns = {c.lower() for c in (metadata_blacklist or [])}
+
+    def _model_name(info: SourceInfo) -> str:
+        return info.schema.upper() if info.schema else config.source_model_name
+
+    def _dep(info: SourceInfo) -> str:
+        return "loose" if info.left_join else config.dependency_type
+
+    # Table-level granularity: one row per unique source table,
+    # column slots empty. Skip everything below.
+    if config.granularity == "table":
+        seen: Set[str] = set()
+        for src in pf.source_tables:
+            # `src` from pf.source_tables is already in "catalog.db.table"
+            # qualified form when present — find the matching info by
+            # bare table name.
+            bare = src.split(".")[-1]
+            info = next(
+                (i for i in info_map.values() if i.table_name == bare),
+                SourceInfo(table_name=bare),
+            )
+            key = info.table_name
+            if key in seen:
+                continue
+            seen.add(key)
+            rows.append([
+                config.target_model_name,
+                target_table,
+                "",
+                _model_name(info),
+                info.table_name,
+                "",
+                "false",
+                "",
+                _dep(info),
+                source_version,
+            ])
+        return rows
 
     sources_with_projections: Set[str] = set()
 
     for lin in pf.lineage:
         if lin.output_column == "*":
             continue
+        # Skip metadata-column outputs — these are stripped from the
+        # optimised SQL by `strip_metadata_columns`, so they shouldn't
+        # show up in movement.csv either.
+        if lin.output_column.lower() in excluded_columns:
+            continue
         derived = "true" if _is_derived_lineage(lin) else "false"
         expression = _clean_movement_expression(lin.expression)
         if lin.source_columns:
             for tbl, col in lin.source_columns:
-                source_table = _resolve_source_table(tbl, alias_map)
-                sources_with_projections.add(source_table)
+                info = _resolve_source_info(tbl, info_map)
+                sources_with_projections.add(info.table_name)
                 rows.append([
                     config.target_model_name,
                     target_table,
                     lin.output_column,
-                    config.source_model_name,
-                    source_table,
+                    _model_name(info),
+                    info.table_name,
                     col,
                     derived,
                     expression,
-                    config.dependency_type,
+                    _dep(info),
+                    source_version,
                 ])
         else:
             # Constant or empty-source projection — record the
@@ -2016,29 +2580,31 @@ def emit_movement_csv_rows(
                 derived,
                 expression,
                 config.dependency_type,
+                source_version,
             ])
 
     # Join-only sources: tables referenced via FROM/JOIN that no
     # projection actually reads. Emit one row with empty column slots
     # so the dependency is still recorded.
     for src in pf.source_tables:
-        if src in sources_with_projections:
+        bare = src.split(".")[-1]
+        if bare in sources_with_projections:
             continue
-        # Also check the unqualified last segment — alias_map values
-        # may carry qualifiers (catalog.db.table) while lineage
-        # source_columns use the bare alias.
-        if src.split(".")[-1] in sources_with_projections:
-            continue
+        info = next(
+            (i for i in info_map.values() if i.table_name == bare),
+            SourceInfo(table_name=bare),
+        )
         rows.append([
             config.target_model_name,
             target_table,
             "",
-            config.source_model_name,
-            src,
+            _model_name(info),
+            info.table_name,
             "",
             "false",
             "",
-            config.dependency_type,
+            _dep(info),
+            source_version,
         ])
 
     return rows
@@ -2055,14 +2621,19 @@ def _rows_to_csv(rows: List[List[str]]) -> str:
     return buf.getvalue()
 
 
-def emit_movement_csv(pf: ParsedFile, config: MovementConfig) -> str:
+def emit_movement_csv(
+    pf: ParsedFile,
+    config: MovementConfig,
+    metadata_blacklist: Optional[List[str]] = None,
+) -> str:
     """Per-query movement.csv text."""
-    return _rows_to_csv(emit_movement_csv_rows(pf, config))
+    return _rows_to_csv(emit_movement_csv_rows(pf, config, metadata_blacklist))
 
 
 def emit_movement_csv_rollup(
     parsed_files: List[ParsedFile],
     config: MovementConfig,
+    metadata_blacklist: Optional[List[str]] = None,
 ) -> str:
     """Run-level rollup: header once, all per-query rows concatenated
     in input order."""
@@ -2070,7 +2641,7 @@ def emit_movement_csv_rollup(
     for pf in parsed_files:
         if pf.parse_error:
             continue
-        all_rows.extend(emit_movement_csv_rows(pf, config))
+        all_rows.extend(emit_movement_csv_rows(pf, config, metadata_blacklist))
     return _rows_to_csv(all_rows)
 
 
@@ -2788,6 +3359,43 @@ def write_text(path: Path, content: str) -> None:
     path.write_text(content, encoding="utf-8")
 
 
+def _select_input_files(
+    input_dir: Path,
+    recursive: bool,
+    include: List[str],
+    exclude: List[str],
+) -> List[Path]:
+    """Apply include/exclude glob filters to enumerate input SQL files.
+
+    Behaviour:
+      - ``include`` empty -> every ``*.sql`` file under input_dir.
+      - ``include`` non-empty -> union of files matching any pattern.
+      - ``exclude`` is applied AFTER include (a file matching both is
+        excluded).
+      - All patterns are relative to ``input_dir`` and use forward
+        slashes per pathlib's glob conventions.
+    """
+    pattern = "**/*.sql" if recursive else "*.sql"
+    if not include:
+        candidates = sorted(input_dir.glob(pattern))
+    else:
+        seen: Set[Path] = set()
+        for inc in include:
+            for p in input_dir.glob(inc):
+                if p.suffix == ".sql" and p.is_file():
+                    seen.add(p)
+        candidates = sorted(seen)
+
+    if exclude:
+        excluded: Set[Path] = set()
+        for exc in exclude:
+            for p in input_dir.glob(exc):
+                excluded.add(p)
+        candidates = [p for p in candidates if p not in excluded]
+
+    return candidates
+
+
 def process_folder(
     input_dir: Path,
     output_dir: Path,
@@ -2796,6 +3404,9 @@ def process_folder(
     diff_against: Optional[Path] = None,
     movement_config: Optional[MovementConfig] = None,
     customer_config: Optional[CustomerRuleConfig] = None,
+    output_config: Optional[OutputConfig] = None,
+    optimize_config: Optional[OptimizeConfig] = None,
+    file_config: Optional[FileConfig] = None,
     detection_only: bool = False,
 ) -> int:
     """Run the pipeline. Returns the number of files processed.
@@ -2810,8 +3421,17 @@ def process_folder(
     additionally writes ``diff.md`` summarising what changed between
     the two snapshots.
     """
-    pattern = "**/*.sql" if recursive else "*.sql"
-    sql_files = sorted(input_dir.glob(pattern))
+    out_cfg = output_config or OutputConfig()
+    opt_cfg = optimize_config or OptimizeConfig()
+    file_cfg = file_config or FileConfig()
+    union_separator = opt_cfg.union_separator
+
+    sql_files = _select_input_files(
+        input_dir,
+        recursive=recursive,
+        include=file_cfg.include,
+        exclude=file_cfg.exclude,
+    )
     if not sql_files:
         print(f"No *.sql files found in {input_dir}", file=sys.stderr)
         return 0
@@ -2837,13 +3457,18 @@ def process_folder(
         rel_key = str(rel).replace("\\", "/")
         query_dir = output_dir / rel.parent / rel.stem
 
-        pf = parse_file(sql_path, metadata=metadata if metadata else None)
+        pf = parse_file(
+            sql_path,
+            metadata=metadata if metadata else None,
+            union_separator=union_separator,
+        )
         parsed_files.append(pf)
 
         findings = run_quality_checks(pf, customer_config=customer_config)
         optimized_sql, findings, transform_log = apply_auto_fixes(
             pf.raw_sql, findings,
             customer_config=customer_config,
+            optimize_config=opt_cfg,
             detection_only=detection_only,
         )
         findings_per_file[rel_key] = findings
@@ -2861,21 +3486,24 @@ def process_folder(
         if pf.annotations.header_block.strip():
             optimized_sql = pf.annotations.header_block + "\n" + optimized_sql.lstrip()
 
-        # Per-query folder contents:
-        #   optimized.sql            — rewritten SQL with header annotations
-        #   mapping.bfm.yaml         — Business-Friendly Mapping shape
-        #   mapping.cte.yaml         — CTE-notebook shape
-        #   annotation.entity.yaml   — SQL-First entity YAML
-        #   genie.md                 — Genie prompt from the ORIGINAL query
-        #   findings.md              — this file's quality findings
+        # Per-query folder contents (always emitted):
         write_text(query_dir / "optimized.sql", optimized_sql)
-        write_yaml(query_dir / "mapping.bfm.yaml", emit_bfm_mapping(pf))
-        write_yaml(query_dir / "mapping.cte.yaml", emit_cte_mapping(pf))
-        write_yaml(query_dir / "annotation.entity.yaml", emit_entity_yaml(pf))
-        write_text(query_dir / "genie.md", emit_genie_prompt(pf))
+        write_text(query_dir / "genie.md", emit_genie_prompt(
+            pf, customer_config=customer_config, optimize_config=opt_cfg,
+        ))
         write_text(query_dir / "findings.md", emit_findings_md(pf, findings))
+        meta_blacklist = customer_config.metadata_blacklist if customer_config else None
         write_text(query_dir / "movement.csv",
-                   emit_movement_csv(pf, movement_config or MovementConfig()))
+                   emit_movement_csv(pf, movement_config or MovementConfig(),
+                                     metadata_blacklist=meta_blacklist))
+
+        # Optional artefacts (opt-in via config).
+        if out_cfg.bfm_mapping:
+            write_yaml(query_dir / "mapping.bfm.yaml", emit_bfm_mapping(pf))
+        if out_cfg.cte_mapping:
+            write_yaml(query_dir / "mapping.cte.yaml", emit_cte_mapping(pf))
+        if out_cfg.annotation_entity:
+            write_yaml(query_dir / "annotation.entity.yaml", emit_entity_yaml(pf))
 
     # Roll-up artefacts
     lineage = emit_openlineage(parsed_files)
@@ -2886,7 +3514,13 @@ def process_folder(
     # concatenated in input order.
     write_text(
         output_dir / "movement.csv",
-        emit_movement_csv_rollup(parsed_files, movement_config or MovementConfig()),
+        emit_movement_csv_rollup(
+            parsed_files,
+            movement_config or MovementConfig(),
+            metadata_blacklist=(
+                customer_config.metadata_blacklist if customer_config else None
+            ),
+        ),
     )
 
     write_text(
@@ -2927,15 +3561,24 @@ def main(argv: Optional[List[str]] = None) -> int:
         help="Recurse into subdirectories (default: top-level only)",
     )
     parser.add_argument(
+        "--config",
+        type=str,
+        default=None,
+        help=(
+            "Path to a YAML config file (see "
+            "sql_process.config.yaml). When omitted, the script "
+            "auto-loads sql_process.config.yaml from its own folder "
+            "if present. Pass 'none' to disable config-file loading."
+        ),
+    )
+    parser.add_argument(
         "--metadata",
         type=Path,
         default=None,
         help=(
-            "Path to a YAML file describing source-table schemas "
-            "(see README for format). Enables sqlglot.qualify() — "
-            "resolves bare column refs to their owning table and "
-            "expands SELECT * into explicit column lists. If omitted, "
-            "the script looks for <input_dir>/_metadata.yaml."
+            "Path to a YAML file describing source-table schemas. "
+            "Enables sqlglot.qualify(). If omitted, the script looks "
+            "for <input_dir>/_metadata.yaml."
         ),
     )
     parser.add_argument(
@@ -2945,89 +3588,34 @@ def main(argv: Optional[List[str]] = None) -> int:
         default=None,
         help=(
             "Path to a previous output folder. When set, the run "
-            "additionally writes diff.md summarising what changed "
-            "between the two snapshots (added/removed files, mapping "
-            "column changes, stitching edge changes)."
+            "additionally writes diff.md summarising what changed."
         ),
     )
-    parser.add_argument(
-        "--target-model",
-        default="SSF",
-        help=(
-            "target_model_name value in every movement.csv row. "
-            "Default: SSF."
-        ),
-    )
-    parser.add_argument(
-        "--source-model",
-        default="SSF_SOURCE",
-        help=(
-            "source_model_name value in every movement.csv row. "
-            "Default: SSF_SOURCE."
-        ),
-    )
-    parser.add_argument(
-        "--dependency-type",
-        default="strict",
-        help=(
-            "dependency_type value in every movement.csv row. "
-            "Default: strict."
-        ),
-    )
-    parser.add_argument(
-        "--legacy-schemas",
-        default="",
-        help=(
-            "Comma-separated list of legacy schema names to replace "
-            "(rule 1). Off by default; example: "
-            "--legacy-schemas bodm,csz,hz,cz"
-        ),
-    )
-    parser.add_argument(
-        "--replacement-schema",
-        default="automatically_inferred_qualifier",
-        help=(
-            "Schema name to substitute for any legacy schema match "
-            "(rule 1). Default: automatically_inferred_qualifier"
-        ),
-    )
-    parser.add_argument(
-        "--date-variable",
-        default="process_date",
-        help=(
-            "Template variable name to use for SCD2 point-in-time "
-            "predicates (rule 2). Legacy `{reporting_date}` is "
-            "auto-rewritten to this. Default: process_date"
-        ),
-    )
-    parser.add_argument(
-        "--metadata-blacklist",
-        default=(
-            "snapshot_date,insert_dts,update_dts,current_flag,"
-            "delete_flag,delta_flag,create_timestamp,start_dts,end_dts"
-        ),
-        help=(
-            "Comma-separated list of metadata column names that must "
-            "not appear in CTE/final outputs (rule 4)."
-        ),
-    )
-    parser.add_argument(
-        "--obsolete-ctes",
-        default="extract_dates,create_timeline,finalize_timeline",
-        help=(
-            "Comma-separated list of CTE names to treat as obsolete "
-            "and auto-remove (rule 3)."
-        ),
-    )
+    # Movement / customer-rule overrides. Empty string means "use
+    # config value". None (not passed) leaves the config value.
+    parser.add_argument("--target-model", default=None,
+                        help="Override movement.target_model_name from the config.")
+    parser.add_argument("--source-model", default=None,
+                        help="Override movement.source_model_name from the config.")
+    parser.add_argument("--dependency-type", default=None,
+                        help="Override movement.dependency_type from the config.")
+    parser.add_argument("--granularity", default=None, choices=[None, "column", "table"],
+                        help="Override movement.granularity (column or table).")
+    parser.add_argument("--legacy-schemas", default=None,
+                        help="Override rules.legacy_schemas (comma-separated).")
+    parser.add_argument("--replacement-schema", default=None,
+                        help="Override rules.replacement_schema.")
+    parser.add_argument("--date-variable", default=None,
+                        help="Override rules.date_variable.")
+    parser.add_argument("--table-qualifier", default=None,
+                        help="Override optimize.table_qualifier (empty disables).")
     parser.add_argument(
         "--detection-only",
         action="store_true",
         help=(
             "Skip every auto-fix transform — run as a pure linter. "
-            "The optimised SQL is just the format-normalised input; "
-            "findings.md and movement.csv still emit. Use this as a "
-            "safety fallback when an auto-fix misbehaves on real "
-            "customer SQL."
+            "Use this as a safety fallback when an auto-fix "
+            "misbehaves on real customer SQL."
         ),
     )
     args = parser.parse_args(argv)
@@ -3036,22 +3624,34 @@ def main(argv: Optional[List[str]] = None) -> int:
         print(f"Input folder not found: {args.input_dir}", file=sys.stderr)
         return 2
 
-    movement_config = MovementConfig(
-        target_model_name=args.target_model,
-        source_model_name=args.source_model,
-        dependency_type=args.dependency_type,
-    )
+    # Load YAML config.
+    if args.config and args.config.lower() == "none":
+        cfg = PipelineConfig()
+    elif args.config:
+        cfg = load_config(Path(args.config))
+    else:
+        cfg = load_config(None)
 
+    # Apply CLI overrides (only when explicitly passed).
     def _split_csv(value: str) -> List[str]:
         return [s.strip() for s in value.split(",") if s.strip()]
 
-    customer_config = CustomerRuleConfig(
-        legacy_schemas=_split_csv(args.legacy_schemas),
-        replacement_schema=args.replacement_schema,
-        date_variable=args.date_variable,
-        metadata_blacklist=_split_csv(args.metadata_blacklist),
-        obsolete_cte_names=_split_csv(args.obsolete_ctes),
-    )
+    if args.target_model is not None:
+        cfg.movement.target_model_name = args.target_model
+    if args.source_model is not None:
+        cfg.movement.source_model_name = args.source_model
+    if args.dependency_type is not None:
+        cfg.movement.dependency_type = args.dependency_type
+    if args.granularity is not None:
+        cfg.movement.granularity = args.granularity
+    if args.legacy_schemas is not None:
+        cfg.rules.legacy_schemas = _split_csv(args.legacy_schemas)
+    if args.replacement_schema is not None:
+        cfg.rules.replacement_schema = args.replacement_schema
+    if args.date_variable is not None:
+        cfg.rules.date_variable = args.date_variable
+    if args.table_qualifier is not None:
+        cfg.optimize.table_qualifier = args.table_qualifier or None
 
     n = process_folder(
         args.input_dir,
@@ -3059,15 +3659,29 @@ def main(argv: Optional[List[str]] = None) -> int:
         args.recursive,
         metadata_path=args.metadata,
         diff_against=args.diff_against,
-        movement_config=movement_config,
-        customer_config=customer_config,
+        movement_config=cfg.movement,
+        customer_config=cfg.rules,
+        output_config=cfg.outputs,
+        optimize_config=cfg.optimize,
+        file_config=cfg.files,
         detection_only=args.detection_only,
     )
+
+    # List the optional artefacts that were actually emitted, so the
+    # banner reflects what the user actually got.
+    optional_outputs = []
+    if cfg.outputs.bfm_mapping:
+        optional_outputs.append("mapping.bfm.yaml")
+    if cfg.outputs.cte_mapping:
+        optional_outputs.append("mapping.cte.yaml")
+    if cfg.outputs.annotation_entity:
+        optional_outputs.append("annotation.entity.yaml")
+
     print(f"Processed {n} file(s) -> {args.output_dir}")
     print(f"  {n} per-query folder(s) — each with:")
-    print(f"      optimized.sql, mapping.bfm.yaml, mapping.cte.yaml,")
-    print(f"      annotation.entity.yaml, genie.md, findings.md,")
-    print(f"      movement.csv")
+    print(f"      optimized.sql, genie.md, findings.md, movement.csv")
+    if optional_outputs:
+        print(f"      + {', '.join(optional_outputs)}")
     print(f"  lineage.json  OpenLineage roll-up")
     print(f"  movement.csv  Run-level mapping rollup")
     print(f"  report.md     Run summary")

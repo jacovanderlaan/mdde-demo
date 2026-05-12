@@ -3,7 +3,7 @@
 **Parse:** ok
 **Qualify:** ok
 
-**Total:** 11 (error=1, warning=4, info=6)  
+**Total:** 12 (error=1, warning=4, info=7)  
 **Auto-fixed:** 1
 
 | Location | Rule | Severity | Auto-fixed | Message |
@@ -19,3 +19,4 @@
 | <file> | HARDCODED_DATE | info | no | Hardcoded date literal: '2026-01-01' |
 | <file> | PK_DEDUP_CHECK_MISSING | info | no | @pk annotations present but no ROW_NUMBER PARTITION BY <pk> for dedup verification |
 | <file> | WINDOW_NO_ORDER | error | no | ROW_NUMBER() without ORDER BY - results are non-deterministic |
+| <file> | MISSING_SOURCE_VERSION | info | no | Filename 'customer_revenue_bad.sql' has fewer than 3 hyphen-separated parts; movement.csv source_version will be empty |

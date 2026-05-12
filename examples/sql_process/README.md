@@ -154,62 +154,78 @@ above the per-query folder: `input/staging/foo.sql` →
 
 ---
 
+## Configuration — `sql_process.config.yaml`
+
+All defaults live in [sql_process.config.yaml](sql_process.config.yaml)
+next to the script. The CLI auto-loads it on every run; pass
+`--config <path>` to point at a different file, or `--config none`
+to disable config loading entirely (rely on built-in defaults +
+CLI flags).
+
+The YAML has five blocks:
+
+- **`movement`** — defaults for `movement.csv` (`target_model_name`,
+  `source_model_name`, `dependency_type`, `granularity`)
+- **`outputs`** — toggles for the three optional artefacts
+  (`bfm_mapping`, `cte_mapping`, `annotation_entity`)
+- **`rules`** — customer rule pack inputs (`legacy_schemas`,
+  `replacement_schema`, `date_variable`, `obsolete_cte_names`,
+  `metadata_blacklist`)
+- **`optimize`** — SQL rewriting knobs (`table_qualifier`,
+  `union_separator`)
+- **`files`** — `include` / `exclude` glob patterns to subset the
+  input directory
+
+CLI flags override individual YAML values; see `--help` for the
+list.
+
+---
+
 ## Movement CSV — customer-specific mapping format
 
-`movement.csv` is a customer-specific mapping export shape. It
-captures the same lineage that `mapping.bfm.yaml` does, but as a
-flat CSV with the column set one customer site uses to ingest
-mappings into their downstream tooling.
+`movement.csv` is a customer-specific mapping export shape. Captures
+the same lineage that `mapping.bfm.yaml` does, but as a flat CSV
+with the column set one customer site uses to ingest mappings into
+their downstream tooling.
 
 | Column | Source |
 |---|---|
-| `target_model_name` | `--target-model` (default `SSF`) |
-| `target_table_name` | derived from input filename: stem, or everything left of the first `-` |
-| `target_column_name` | output column name |
-| `source_model_name` | `--source-model` (default `SSF_SOURCE`) |
-| `source_table_name` | the table the output column reads from (alias resolved) |
-| `source_column_name` | the source column |
-| `derived_indicator` | `true` if the lineage classifier says the projection is an aggregate / expression / constant; `false` for direct refs and pure renames |
-| `movement_expression` | the SQL fragment that produces the column (unquoted, MDDE annotation comments stripped) |
-| `dependency_type` | `--dependency-type` (default `strict`) |
+| `target_model_name` | `movement.target_model_name` (default `Converter`) |
+| `target_table_name` | filename stem, or everything left of the first `-` |
+| `target_column_name` | output column name (empty in table-level mode) |
+| `source_model_name` | the source's schema name in UPPERCASE if present; else `movement.source_model_name` (default `SSF`) |
+| `source_table_name` | bare table name (catalog/schema stripped) |
+| `source_column_name` | the source column (empty for join-only or table-level) |
+| `derived_indicator` | `true` if the lineage classifier returns aggregate / expression / constant; `false` for direct refs and pure renames |
+| `movement_expression` | the SQL fragment producing the column (unquoted, comments stripped) |
+| `dependency_type` | `loose` when the source is reached via LEFT JOIN; else `movement.dependency_type` (default `strict`) |
+| `source_version` | the 3rd hyphen-separated part of the filename stem (empty when fewer than 3 parts) |
 
 **Every field is double-quoted** to match the customer site's import
 expectations.
 
+### Granularity
+
+- `column` (default) — one row per `(target_column, source_column)` pair
+- `table` — one row per unique source table; column fields empty
+
+Set via YAML (`movement.granularity`) or CLI (`--granularity table`).
+
 ### Row generation rules
 
-- **One row per `(target_column, source_column)` pair.** A
-  projection that reads two source columns produces two rows.
-- **Constants and empty-source projections** still emit a row with
-  empty `source_table_name` and `source_column_name`.
-- **Join-only tables** — sources referenced in `FROM`/`JOIN` whose
-  columns no projection reads — emit one row with empty
-  `target_column_name` and `source_column_name`, `derived_indicator
-  = false`. The dependency is recorded without inventing a
-  spurious column mapping.
-- **`*` projections** are skipped (qualify() should expand them
-  before this stage; un-expanded stars don't carry per-column
-  lineage).
+- Constants and empty-source projections still emit a row with empty
+  source slots.
+- Join-only tables (referenced in FROM/JOIN, no projection reads
+  them) emit one row with empty column slots.
+- Metadata-blacklist columns are filtered out of movement.csv too,
+  matching what `strip_metadata_columns` removes from the optimised
+  SQL.
 
 ### Where it's written
 
-- `<output>/<query>/movement.csv` — per-query slice (one CSV per
-  input SQL file, containing only that file's rows)
-- `<output>/movement.csv` — run-level rollup (header once, every
-  per-query row concatenated in input order)
-
-### Overriding the defaults
-
-```bash
-python sql_process.py input/ --out output/ \
-       --target-model SSF \
-       --source-model SSF_SOURCE \
-       --dependency-type strict
-```
-
-All three flags accept any string; the script doesn't validate
-against an enum. Whatever the customer's import tool expects can
-be passed verbatim.
+- `<output>/<query>/movement.csv` — per-query slice
+- `<output>/movement.csv` — run-level rollup (header once, all rows
+  in input order)
 
 ---
 

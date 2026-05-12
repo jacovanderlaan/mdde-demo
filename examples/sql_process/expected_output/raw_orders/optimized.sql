@@ -3,6 +3,17 @@
 -- @mdde-stereotype: src_raw
 -- @mdde-description: Raw orders landing from order management system
 
+/*
+Migration Details:
+- Original SQL File: raw_orders.sql
+- Target SQL File:  optimized.sql
+- Summary of Changes:
+  - Rewrote table qualifiers (catalog/schema) to the target qualifier.
+
+Validation Checklist:
+- [X] Table qualifiers normalised.
+*/
+
 /* @mdde-entity: raw_orders */ /* @mdde-layer: source */ /* @mdde-stereotype: src_raw */ /* @mdde-description: Raw orders landing from order management system */
 CREATE OR REPLACE VIEW raw_orders AS
 SELECT
@@ -13,4 +24,4 @@ SELECT
   total_amount,
   currency,
   source_system
-FROM landing.oms_orders_export;
+FROM schema_identifier_ssf_snapshot.oms_orders_export;
