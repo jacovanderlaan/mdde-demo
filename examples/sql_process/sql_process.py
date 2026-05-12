@@ -1000,19 +1000,28 @@ def lift_subqueries_to_ctes(
 # Single-table projection pushdown
 # -----------------------------------------------------------------------------
 #
-# Rewrites the outer SELECT so that single-table column picks, renames,
-# derivations, and filters move into a per-source CTE named
-# ``<table>_filtered`` (when a WHERE predicate is also pushed) or
-# ``<table>_prepared`` (projections only, no filter). Matches the
-# customer naming convention (CUSTOMER_RULES.md rule 7). The outer
-# SELECT keeps only cross-table work
-# (joins, multi-table CASE, aggregates, window functions).
+# Rewrites the outer SELECT so that single-table column picks and pure
+# renames, plus single-table WHERE predicates, move into a per-source
+# CTE named ``<table>_filtered`` (when a WHERE predicate is also
+# pushed) or ``<table>_prepared`` (projections only, no filter).
+# Matches the customer naming convention (CUSTOMER_RULES.md rule 7).
+#
+# Split of concerns between layers:
+#   - Source CTE — the "what this table exposes" layer. Bare columns
+#     and pure renames (``col AS alias``) only. Single-table WHERE
+#     predicates may also be pushed (a filter is not a value transform).
+#   - Outer SELECT (the joining layer) — the "final formatting" layer.
+#     CAST, CASE, COALESCE, arithmetic, function calls, and constants
+#     all live HERE, even when single-source. This keeps casting and
+#     defaulting next to the joins so a reader sees the whole
+#     formatting/result shape in one place.
 #
 # Skipped sources:
-#   - CTEs already defined in this file's WITH — leave existing
-#     CTE-shaped code alone.
-#   - Tables with nothing to push (no renames, no derivations, no
-#     single-table predicates) — avoid identity CTEs.
+#   - CTEs already defined in this file's WITH (except for "passthrough"
+#     CTEs of shape ``SELECT * FROM real_table [WHERE ...]``, which the
+#     pushdown mutates in place — see ``_passthrough_cte_target``).
+#   - Tables with nothing to push (no renames, no single-table filters).
+#     Avoids creating identity CTEs.
 
 
 def _expression_uses_only(
@@ -1043,23 +1052,35 @@ def _expression_uses_only(
 
 
 def _is_pushable_projection(proj: exp.Expression) -> bool:
-    """True if a projection is the kind we push down.
+    """True if a projection is the kind we push into a source CTE.
 
-    Pushable: bare columns, renames, single-table derivations,
-    CASE/CAST/string/arith on one table's columns.
+    Strict rule: ONLY bare columns and pure renames belong in source
+    CTEs. Anything that transforms the value — CAST, CASE, COALESCE,
+    arithmetic, function calls, constants — stays at the outer SELECT.
 
-    Not pushable: anything containing an aggregate, window function,
-    or subquery — those reshape rows and must stay outer.
+    Rationale: the source CTE is a "what does this table expose"
+    layer (renames included so downstream code uses the target
+    vocabulary). Casting and defaulting are formatting concerns that
+    belong with the final join/result so a reader sees them together
+    in one place.
+
+    Pushable:
+      - ``c.foo``                (bare column)
+      - ``c.foo AS bar``         (pure rename of one column)
+
+    Not pushable (stays at outer SELECT):
+      - ``CAST(c.foo AS x)``                          (cast)
+      - ``CASE WHEN c.flag = 'Y' THEN TRUE ... END``  (case / default)
+      - ``COALESCE(c.foo, c.bar)``                    (default)
+      - ``UPPER(c.foo)``                              (transform)
+      - ``c.x + c.y`` / ``c.x * (-1)``                (arithmetic)
+      - ``'literal' AS valuation_type`` / ``1 AS qty`` (constants)
     """
-    if any(proj.find_all(exp.AggFunc)):
-        return False
-    if any(proj.find_all(exp.Window)):
-        return False
-    if any(proj.find_all(exp.Subquery)):
-        return False
-    if any(proj.find_all(exp.Star)):
-        return False
-    return True
+    if isinstance(proj, exp.Column):
+        return True
+    if isinstance(proj, exp.Alias) and isinstance(proj.this, exp.Column):
+        return True
+    return False
 
 
 def _split_and(predicate: exp.Expression) -> List[exp.Expression]:

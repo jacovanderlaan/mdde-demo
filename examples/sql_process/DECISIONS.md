@@ -77,22 +77,34 @@ full context.
 
 ## Single-table projection pushdown
 
-### D4. Which expressions count as single-table
+### D4. Which expressions count as pushable into a source CTE
 
 - **Question:** what expression shapes are "single-table enough" to
-  push into a `<table>_proj` CTE?
-- **Decision:** all four offered shapes — direct refs, renames,
-  single-column derivations, single-table multi-column expressions
-  (CASE with multiple cols from one table, AND of one table's
-  predicates, etc.).
-- **Why it matters:** the goal is to free the outer SELECT from
-  any work it doesn't strictly need to do. Including multi-column
-  single-table expressions captures common patterns like `CASE
-  WHEN c.country = 'NL' AND c.created_at > '2026-01-01' THEN ...`.
-- **Rejected:** none — the user opted in to every option.
-- **Reflected in code at:** `_is_pushable_projection()` (filters
-  out aggregates, windows, subqueries, `*`) and
-  `_expression_uses_only()` (the single-table check).
+  push into a `<table>_filtered` / `<table>_prepared` CTE?
+- **Decision (2026-05-12, revised):** ONLY bare columns and pure
+  renames (`col AS alias`). Anything that transforms the value —
+  `CAST`, `CASE`, `COALESCE`, arithmetic, function calls,
+  constants — stays in the outer SELECT, even when single-source.
+  WHERE-predicate pushdown (a filter, not a value transform) is
+  unchanged.
+- **Why it matters:** the source CTE is a "what this table exposes
+  (with target vocabulary)" layer. Casting and defaulting are
+  formatting concerns — keeping them next to the JOINs/result lets
+  a reader see the whole shape of the final output in one place
+  instead of chasing values through three CTE bodies.
+- **Earlier (2026-05) decision (superseded):** push all four shapes,
+  including single-table CASE/CAST/COALESCE/arith. Reverted after
+  customer-site feedback: casting and defaulting belong with the
+  joins, not in the source layer.
+- **Rejected alternatives:**
+  - "Push lossless single-table functions like `UPPER`/`TRIM`/
+    `SUBSTRING` but not casts/defaults" — requires maintaining a
+    function-purity classifier and still leaves a gray area around
+    `LPAD`, `TO_CHAR`, etc. Strict-renames-only is simpler and
+    matches the customer's own pattern.
+- **Reflected in code at:** `_is_pushable_projection()` (renames-only
+  filter) and `_expression_uses_only()` (the single-table check
+  used downstream for filter pushdown).
 
 ### D5. Naming the per-source CTE
 
