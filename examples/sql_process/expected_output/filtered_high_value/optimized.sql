@@ -14,25 +14,27 @@ Migration Details:
   - Pushed single-table projections and filters into per-source `_filtered` / `_prepared` CTEs.
   - Lifted JOINs and multi-source derivations into a dedicated `_joined` CTE; outer SELECT reads from a single-table FROM.
   - Lifted cross-source WHERE predicates into a dedicated `_filtered` CTE so the joined CTE stays single-concern.
+  - Rewrote table qualifiers (catalog/schema) to the target qualifier.
 
 Validation Checklist:
 - [X] Modular CTE structure applied.
 - [X] JOIN isolated into joined CTE.
 - [X] Cross-source filtering isolated.
+- [X] Table qualifiers normalised.
 */
 
 WITH customer_prepared AS (
   SELECT
     customer_id AS customer_id,
     country AS country
-  FROM customer
+  FROM schema_identifier_ssf_snapshot.customer
 ), orders_filtered AS (
   SELECT
     order_date AS order_date,
     amount AS amount,
     customer_id,
     payment_method
-  FROM orders
+  FROM schema_identifier_ssf_snapshot.orders
   WHERE
     amount > 100
 ), filtered_high_value_joined AS (

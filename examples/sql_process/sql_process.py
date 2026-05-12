@@ -1237,39 +1237,59 @@ def lift_subqueries_to_ctes(
     # its own CTE so the body becomes ``SELECT * FROM a EXCEPT
     # SELECT * FROM b``. Operates on top-level Except/Intersect only
     # (a nested EXCEPT inside another query is left alone).
-    if isinstance(target, (exp.Except, exp.Intersect)) and (
-        isinstance(target.this, exp.Select)
-        and isinstance(target.expression, exp.Select)
-    ):
-        a_name = _make_cte_name(
-            exp.Subquery(this=target.this), fallback_idx, used_names,
-        )
-        fallback_idx += 1
-        b_name = _make_cte_name(
-            exp.Subquery(this=target.expression), fallback_idx, used_names,
-        )
-        fallback_idx += 1
-        new_ctes.append(exp.CTE(
-            this=target.this.copy(),
-            alias=exp.TableAlias(this=exp.to_identifier(a_name)),
-        ))
-        new_ctes.append(exp.CTE(
-            this=target.expression.copy(),
-            alias=exp.TableAlias(this=exp.to_identifier(b_name)),
-        ))
-        target.set(
-            "this",
-            exp.Select(expressions=[exp.Star()]).from_(
-                exp.Table(this=exp.to_identifier(a_name))
-            ),
-        )
-        target.set(
-            "expression",
-            exp.Select(expressions=[exp.Star()]).from_(
-                exp.Table(this=exp.to_identifier(b_name))
-            ),
-        )
-        rewrote_any = True
+    if isinstance(target, (exp.Except, exp.Intersect)):
+        # Lift each side independently. Skip a side that's already a
+        # bare ``SELECT * FROM <name>`` (already lifted, e.g., by the
+        # UNION-branch pass that may have run earlier on a nested
+        # Union inside the EXCEPT).
+        def _is_already_lifted_setop_side(b: exp.Expression) -> bool:
+            if not isinstance(b, exp.Select):
+                return False
+            projs = b.expressions or []
+            if len(projs) != 1 or not isinstance(projs[0], exp.Star):
+                return False
+            if (
+                b.args.get("joins")
+                or b.args.get("where")
+                or b.args.get("group")
+                or b.args.get("having")
+                or b.args.get("qualify")
+                or b.args.get("with_")
+            ):
+                return False
+            from_clause = b.args.get("from_") or b.args.get("from")
+            if from_clause is None:
+                return False
+            tables = list(from_clause.find_all(exp.Table))
+            if len(tables) != 1 or list(from_clause.find_all(exp.Subquery)):
+                return False
+            return True
+
+        for side in ("this", "expression"):
+            side_node = target.args.get(side)
+            if side_node is None:
+                continue
+            # Only lift Select bodies — Union sides are already handled
+            # by ``extract_union_branches_to_ctes``.
+            if not isinstance(side_node, exp.Select):
+                continue
+            if _is_already_lifted_setop_side(side_node):
+                continue
+            cte_name = _make_cte_name(
+                exp.Subquery(this=side_node), fallback_idx, used_names,
+            )
+            fallback_idx += 1
+            new_ctes.append(exp.CTE(
+                this=side_node.copy(),
+                alias=exp.TableAlias(this=exp.to_identifier(cte_name)),
+            ))
+            target.set(
+                side,
+                exp.Select(expressions=[exp.Star()]).from_(
+                    exp.Table(this=exp.to_identifier(cte_name))
+                ),
+            )
+            rewrote_any = True
 
     if not rewrote_any:
         return sql, findings
@@ -1725,8 +1745,16 @@ def push_projections_to_source_ctes(
             counter += 1
         used_cte_names.add(cte_name)
 
+        # Preserve the original qualifier (catalog.schema) on the
+        # source CTE's FROM so downstream passes (e.g.,
+        # ``apply_table_qualifier``) can still normalise it. Strip the
+        # alias — inside the CTE we don't need one. Strip any pivots
+        # that the original carried.
+        source_table_node = plan.table_node.copy()
+        source_table_node.set("alias", None)
+        source_table_node.set("pivots", None)
         cte_select = exp.Select(expressions=cte_projections).from_(
-            exp.Table(this=exp.to_identifier(plan.table_name))
+            source_table_node
         )
         combined_pred = _rebuild_and(cte_predicates)
         if combined_pred is not None:
@@ -2127,6 +2155,15 @@ def extract_joined_cte(
     if having is not None:
         for col in having.find_all(exp.Column):
             col.set("table", None)
+    # ORDER BY / QUALIFY also reference the (now-gone) source aliases.
+    order = target.args.get("order")
+    if order is not None:
+        for col in order.find_all(exp.Column):
+            col.set("table", None)
+    qualify = target.args.get("qualify")
+    if qualify is not None:
+        for col in qualify.find_all(exp.Column):
+            col.set("table", None)
 
     # Merge the new CTE into the WITH clause.
     existing_with = target.args.get("with_")
@@ -2435,18 +2472,44 @@ def extract_aggregation_cte(
     if not has_aggregate:
         return sql, findings
 
-    # Look for at least one "formatting" projection (CAST, CASE,
-    # COALESCE, arithmetic, non-aggregate function call, or literal).
-    # If everything non-aggregate is just a bare column / rename, the
-    # split adds noise without simplifying.
+    # Look for at least one "formatting" projection — defined as any
+    # projection that's NOT just a bare column / rename / bare
+    # aggregate. Specifically: an aggregate wrapped in CAST / CASE /
+    # COALESCE / function / arithmetic counts as formatting (the
+    # outer SELECT can offload the aggregate to the CTE and keep the
+    # wrapping formatting alone). A pure CAST/CASE/COALESCE on a
+    # bare column also counts.
     def _is_formatting(p: exp.Expression) -> bool:
-        if _expression_has_aggregate(p):
-            return False
         if isinstance(p, exp.Column):
             return False
         if isinstance(p, exp.Alias) and isinstance(p.this, exp.Column):
             return False
+        # Bare aggregate (e.g., `SUM(x) AS total`) is not formatting —
+        # it's an aggregate that the agg CTE will produce directly.
+        inner = p.this if isinstance(p, exp.Alias) else p
+        if isinstance(inner, exp.AggFunc):
+            return True if _wrapped_in_formatting(p) else False
+        # Otherwise: anything that's not a bare column/rename and not
+        # a bare aggregate counts as formatting.
         return True
+
+    def _wrapped_in_formatting(p: exp.Expression) -> bool:
+        """True if any ancestor of the aggregate inside ``p`` is a
+        CAST/CASE/COALESCE/Func that would benefit from the agg-CTE
+        split (so the wrapping stays at the outer SELECT)."""
+        # Walk the expression: if we find a CAST/CASE/COALESCE/etc.
+        # ABOVE any aggregate, return True.
+        for agg in p.find_all(exp.AggFunc):
+            cur = agg.parent
+            while cur is not None and cur is not p:
+                if isinstance(cur, (exp.Cast, exp.TryCast, exp.Case, exp.Coalesce, exp.Nullif)):
+                    return True
+                # Any non-aggregate function wrapping the aggregate also
+                # counts (e.g., `ROUND(SUM(x), 2)`).
+                if isinstance(cur, exp.Func) and not isinstance(cur, exp.AggFunc):
+                    return True
+                cur = cur.parent
+        return False
 
     has_formatting = any(_is_formatting(p) for p in outer_projections)
     if not has_formatting:
@@ -2576,13 +2639,21 @@ def extract_aggregation_cte(
     target.set("group", None)
     target.set("having", None)
     # Strip any remaining table qualifiers from the OUTER SELECT's
-    # projection list only — at this level columns come from a
-    # single source (the agg CTE) with no alias, so leaving e.g.,
-    # ``app.appraisal_amount_currency`` would be invalid. Critically,
-    # don't walk into CTE bodies attached via ``with_`` (they
-    # reference their own sources and aliases).
+    # projection list, ORDER BY and QUALIFY only — at this level
+    # columns come from a single source (the agg CTE) with no alias,
+    # so leaving e.g., ``app.appraisal_amount_currency`` would be
+    # invalid. Critically, don't walk into CTE bodies attached via
+    # ``with_`` (they reference their own sources and aliases).
     for proj in target.expressions:
         for col in proj.find_all(exp.Column):
+            col.set("table", None)
+    order = target.args.get("order")
+    if order is not None:
+        for col in order.find_all(exp.Column):
+            col.set("table", None)
+    qualify = target.args.get("qualify")
+    if qualify is not None:
+        for col in qualify.find_all(exp.Column):
             col.set("table", None)
 
     # Merge the new CTE into the WITH clause.
@@ -2739,18 +2810,60 @@ def extract_union_branches_to_ctes(
         return sql, findings
 
     root = statements[0]
-    # We operate on a top-level Union. If wrapped in a Create (e.g.,
-    # CREATE VIEW foo AS <union>), descend.
+    # We operate on a top-level Union. The Union may be wrapped in a
+    # Create (e.g., ``CREATE VIEW foo AS <union>``) or composed with a
+    # higher-precedence set-op like EXCEPT / INTERSECT
+    # (``... UNION ALL ... EXCEPT ...`` parses as
+    # ``Except(this=Union(...), expression=Select)``). In all those
+    # cases we still want to lift the Union's branches; the Except /
+    # Create wrapper stays in place.
     container: Optional[exp.Expression] = None
     union_node: Optional[exp.Union] = None
-    if isinstance(root, exp.Create) and isinstance(
-        root.expression, exp.Union
-    ):
-        container = root
-        union_node = root.expression
+    parent_setop: Optional[exp.Expression] = None
+    parent_side: Optional[str] = None  # 'this' or 'expression'
+
+    def _find_top_union(node: exp.Expression) -> Tuple[
+        Optional[exp.Union],
+        Optional[exp.Expression],
+        Optional[str],
+    ]:
+        """Return (union_node, parent_setop, side) where ``side`` is
+        'this' or 'expression' identifying which arg of ``parent_setop``
+        the union is. Returns ``(None, None, None)`` when no top-level
+        Union exists."""
+        if isinstance(node, exp.Union) and not node.args.get("distinct") and not node.args.get("by_name"):
+            return node, None, None
+        if isinstance(node, (exp.Except, exp.Intersect)):
+            # Recurse into both sides; return the first Union we find.
+            for side in ("this", "expression"):
+                child = node.args.get(side)
+                if child is None:
+                    continue
+                if isinstance(child, exp.Union) and not child.args.get("distinct") and not child.args.get("by_name"):
+                    return child, node, side
+                # Recurse one level deeper.
+                inner = _find_top_union(child)
+                if inner[0] is not None:
+                    return inner
+        return None, None, None
+
+    if isinstance(root, exp.Create):
+        body = root.expression or root.this
+        if isinstance(body, exp.Union) and not body.args.get("distinct") and not body.args.get("by_name"):
+            container = root
+            union_node = body
+        else:
+            union_node, parent_setop, parent_side = _find_top_union(body) if body else (None, None, None)
+            if union_node is not None:
+                container = root
     elif isinstance(root, exp.Union):
         union_node = root
+    elif isinstance(root, (exp.Except, exp.Intersect)):
+        union_node, parent_setop, parent_side = _find_top_union(root)
     else:
+        return sql, findings
+
+    if union_node is None:
         return sql, findings
 
     if union_node.args.get("distinct") or union_node.args.get("by_name"):
@@ -2788,8 +2901,11 @@ def extract_union_branches_to_ctes(
     if all(_is_already_lifted(b) for b in branches):
         return sql, findings
 
-    # Existing top-level WITH (CTEs already declared above the union).
-    existing_with = union_node.args.get("with_")
+    # Existing top-level WITH. Most cases: the WITH is on the union
+    # itself. When the union is nested inside an EXCEPT / INTERSECT,
+    # the WITH lives on that outer set-op instead.
+    with_owner: exp.Expression = parent_setop if parent_setop is not None else union_node
+    existing_with = with_owner.args.get("with_")
     used_names: Set[str] = set()
     if existing_with:
         for cte in existing_with.expressions:
@@ -2873,26 +2989,52 @@ def extract_union_branches_to_ctes(
     for nxt in replacements[1:]:
         new_union = exp.Union(this=new_union, expression=nxt, distinct=False)
 
-    # Merge new CTEs into the WITH clause.
-    if existing_with:
-        existing_with.set(
-            "expressions",
-            list(existing_with.expressions) + new_ctes,
-        )
-        # Re-attach the with_ to the new union root.
-        new_union.set("with_", existing_with)
-    elif new_ctes:
-        new_union.set(
-            "with_",
-            exp.With(expressions=new_ctes, recursive=False),
-        )
-
-    # Swap the new union into the parent (Create or top-level).
-    if container is not None:
-        container.set("expression", new_union)
-        statements[0] = container
+    # Decide where the new union sits in the AST and where the WITH
+    # ends up. Three cases:
+    #   (a) Standalone union (no Create wrapper, no Except parent).
+    #       WITH and union root are the new statement root.
+    #   (b) CREATE VIEW ... AS <union>.
+    #       WITH and union both attach to the Create's expression.
+    #   (c) Nested in EXCEPT/INTERSECT. WITH stays on the parent
+    #       set-op; the union is just one operand.
+    if parent_setop is not None:
+        # Case (c): replace the union inside its parent. WITH stays
+        # on the parent (we already used parent_setop as the
+        # with_owner above).
+        parent_setop.set(parent_side, new_union)
+        if existing_with:
+            existing_with.set(
+                "expressions",
+                list(existing_with.expressions) + new_ctes,
+            )
+        elif new_ctes:
+            parent_setop.set(
+                "with_",
+                exp.With(expressions=new_ctes, recursive=False),
+            )
+        if container is not None:
+            container.set("expression", parent_setop)
+            statements[0] = container
+        else:
+            statements[0] = parent_setop
     else:
-        statements[0] = new_union
+        # Cases (a) and (b): WITH attaches to the new union root.
+        if existing_with:
+            existing_with.set(
+                "expressions",
+                list(existing_with.expressions) + new_ctes,
+            )
+            new_union.set("with_", existing_with)
+        elif new_ctes:
+            new_union.set(
+                "with_",
+                exp.With(expressions=new_ctes, recursive=False),
+            )
+        if container is not None:
+            container.set("expression", new_union)
+            statements[0] = container
+        else:
+            statements[0] = new_union
 
     log.union_branches_extracted = True
 

@@ -1,0 +1,35 @@
+%% Infographic 01 — The Five-Layer SQL Refactor Pipeline
+%% Render with: mermaid-cli, draw.io, or any Mermaid-compatible tool
+%% Source brief: 01-layer-model.md
+
+flowchart TD
+    classDef source fill:#dbeafe,stroke:#1e40af,color:#1e3a8a
+    classDef joined fill:#e9d5ff,stroke:#6b21a8,color:#581c87
+    classDef filtered fill:#fef3c7,stroke:#92400e,color:#78350f
+    classDef agg fill:#fed7aa,stroke:#9a3412,color:#7c2d12
+    classDef branch fill:#bbf7d0,stroke:#166534,color:#14532d
+    classDef final fill:#fecaca,stroke:#991b1b,color:#7f1d1d
+
+    INPUT["📥 Raw input SQL<br/>(customer-written, mixed concerns)"]
+
+    L1["<b>1. SOURCE LAYER</b><br/><i>&lt;table&gt;_prepared / &lt;table&gt;_filtered</i><br/>━━━━━━━━━━━<br/><b>What does this table expose?</b><br/>• Bare columns + renames<br/>• Single-source value transforms<br/>&nbsp;&nbsp;(UPPER, TRIM, arithmetic)<br/>• Single-table WHERE filters"]:::source
+
+    L2["<b>2. JOINED LAYER</b><br/><i>&lt;entity&gt;_joined</i><br/>━━━━━━━━━━━<br/><b>How do these tables relate?</b><br/>• JOIN clauses<br/>• Multi-source derivations<br/>• No WHERE, no aggregation"]:::joined
+
+    L3["<b>3. FILTERED LAYER</b><br/><i>&lt;entity&gt;_filtered</i><br/>━━━━━━━━━━━<br/><b>Which slice are we operating on?</b><br/>• Cross-source WHERE predicates<br/>• Fires only when joined<br/>&nbsp;&nbsp;inherited any WHERE"]:::filtered
+
+    L4["<b>4. AGGREGATED LAYER</b><br/><i>&lt;entity&gt;_aggregated</i><br/>━━━━━━━━━━━<br/><b>What's the rollup?</b><br/>• GROUP BY + aggregates only<br/>• Reads single-table input<br/>• No JOINs, no derivations,<br/>&nbsp;&nbsp;no WHERE"]:::agg
+
+    L5["<b>5. BRANCH LAYER</b><br/><i>&lt;branch_tag&gt; / &lt;entity&gt;_&lt;n&gt;</i><br/>━━━━━━━━━━━<br/><b>Which variant of the result?</b><br/>• One CTE per UNION ALL branch<br/>• Each branch fully layered<br/>&nbsp;&nbsp;internally"]:::branch
+
+    L6["<b>6. FINAL SELECT</b><br/><i>(top-level — no CTE)</i><br/>━━━━━━━━━━━<br/><b>How is the result formatted?</b><br/>• CAST<br/>• COALESCE / NULLIF / IFNULL<br/>• CASE WHEN … THEN … ELSE …<br/>• Constants / literals<br/>• ORDER BY, LIMIT"]:::final
+
+    INPUT --> L1
+    L1 --> L2
+    L2 --> L3
+    L3 --> L4
+    L4 --> L5
+    L5 --> L6
+
+    TAKEAWAY["💡 Each CTE answers ONE question.<br/>A reader can stop at the layer they care about."]
+    L6 --> TAKEAWAY

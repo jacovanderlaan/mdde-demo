@@ -1,0 +1,45 @@
+%% Infographic 02 — CTE Regression: Catching Refactor Bugs Early
+%% Render with: mermaid-cli, draw.io, or any Mermaid-compatible tool
+%% Source brief: 02-cte-regression.md
+
+flowchart LR
+    classDef versionA fill:#fee2e2,stroke:#991b1b,color:#7f1d1d
+    classDef versionB fill:#bbf7d0,stroke:#166534,color:#14532d
+    classDef engine fill:#dbeafe,stroke:#1e40af,color:#1e3a8a
+    classDef result fill:#fef3c7,stroke:#92400e,color:#78350f
+    classDef good fill:#bbf7d0,stroke:#166534,color:#14532d
+    classDef bad fill:#fecaca,stroke:#991b1b,color:#7f1d1d
+
+    subgraph INPUT["📥 Two query versions"]
+        VA["<b>Version A</b><br/>Production SQL<br/><i>(180 lines, single SELECT)</i>"]:::versionA
+        VB["<b>Version B</b><br/>Refactored SQL<br/><i>(5-layer CTE pipeline)</i>"]:::versionB
+    end
+
+    subgraph ENGINE["⚙️ DuckDB sandbox + diff engine"]
+        RUN_A["Run A → DataFrame A"]:::engine
+        RUN_B["Run B → DataFrame B"]:::engine
+        ALIGN["Align rows on natural key"]:::engine
+        COMPARE["Per-column comparison<br/>• match rate<br/>• rows differing<br/>• sample mismatches"]:::engine
+    end
+
+    subgraph REPORT["📊 Per-column result"]
+        COL1["✅ customer_id<br/>100% (0 differ)"]:::good
+        COL2["✅ amount<br/>100% (0 differ)"]:::good
+        COL3["⚠️ status<br/>99.7% (12 differ)<br/><i>Pending vs PENDING</i>"]:::bad
+        COL4["✅ tier<br/>100% (0 differ)"]:::good
+    end
+
+    DECISION{{"All columns 100%?"}}
+    SHIP["🚢 Ship the refactor"]:::good
+    FIX["🔧 Author fixes<br/>the divergent column"]:::result
+
+    VA --> RUN_A
+    VB --> RUN_B
+    RUN_A --> ALIGN
+    RUN_B --> ALIGN
+    ALIGN --> COMPARE
+    COMPARE --> REPORT
+    REPORT --> DECISION
+    DECISION -- yes --> SHIP
+    DECISION -- no --> FIX
+    FIX -- re-run --> VB

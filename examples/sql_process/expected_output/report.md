@@ -1,6 +1,6 @@
 # sql_process — run report
 
-Files processed: **16**
+Files processed: **20**
 
 ## Files
 
@@ -12,8 +12,12 @@ Files processed: **16**
 | `customer_revenue_bad.sql` | customer_revenue | business | yes | 2 | 2 | 10 | 12 |
 | `customer_segment_analytics.sql` | customer_segment_analytics | business | yes | 3 | 2 | 10 | 10 |
 | `customer_subqueries.sql` | customer_subqueries | business | yes | 0 | 2 | 7 | 12 |
+| `distinct_customers.sql` | distinct_customers | business | yes | 0 | 1 | 3 | 3 |
 | `except_subscribed_customers.sql` | except_subscribed_customers | business | yes | 0 | 2 | 2 | 2 |
 | `filtered_high_value.sql` | filtered_high_value | business | yes | 0 | 2 | 4 | 2 |
+| `having_top_spenders.sql` | having_top_spenders | business | yes | 0 | 2 | 4 | 3 |
+| `nested_union_except.sql` | nested_union_except | business | yes | 0 | 2 | 2 | 9 |
+| `ordered_top_customers.sql` | ordered_top_customers | business | yes | 0 | 2 | 4 | 1 |
 | `passthrough_with_loans.sql` | passthrough_with_loans | business | yes | 2 | 2 | 6 | 6 |
 | `predicate_subqueries.sql` | predicate_subqueries | business | yes | 0 | 3 | 3 | 3 |
 | `raw_customers.sql` | raw_customers | source | yes | 0 | 1 | 7 | 5 |
@@ -25,7 +29,7 @@ Files processed: **16**
 
 ## Quality findings
 
-**Total:** 88 (error=3, warning=21, info=64)  
+**Total:** 104 (error=3, warning=26, info=75)  
 **Auto-fixed:** 1
 
 | File | Location | Rule | Severity | Auto-fixed | Message |
@@ -78,10 +82,26 @@ Files processed: **16**
 | `customer_subqueries.sql` | <file> | PK_DEDUP_CHECK_MISSING | info | no | @pk annotations present but no ROW_NUMBER PARTITION BY <pk> for dedup verific... |
 | `customer_subqueries.sql` | <file> | MISSING_SOURCE_VERSION | info | no | Filename 'customer_subqueries.sql' has fewer than 3 hyphen-separated parts; m... |
 | `customer_subqueries.sql` | <correlated> | SUBQUERY_NOT_LIFTED | info | no | Correlated subquery in FROM/SELECT position left inline — lifting would orpha... |
+| `distinct_customers.sql` | <file> | DERIVATION_IN_WHERE | info | no | IS [NOT] NULL on raw column 'email' inside WHERE |
+| `distinct_customers.sql` | <file> | DISTINCT_WITHOUT_JUSTIFICATION | info | no | DISTINCT used without a justifying comment |
+| `distinct_customers.sql` | <file> | MISSING_SOURCE_VERSION | info | no | Filename 'distinct_customers.sql' has fewer than 3 hyphen-separated parts; mo... |
 | `except_subscribed_customers.sql` | <file> | DERIVATION_IN_WHERE | info | no | IS [NOT] NULL on raw column 'email' inside WHERE |
 | `except_subscribed_customers.sql` | <file> | MISSING_SOURCE_VERSION | info | no | Filename 'except_subscribed_customers.sql' has fewer than 3 hyphen-separated ... |
 | `filtered_high_value.sql` | <file> | COMBINED_SOURCE_FILTERS | info | no | WHERE clause references columns from 2 sources (c, o) |
 | `filtered_high_value.sql` | <file> | MISSING_SOURCE_VERSION | info | no | Filename 'filtered_high_value.sql' has fewer than 3 hyphen-separated parts; m... |
+| `having_top_spenders.sql` | <file> | SELECT_STAR | warning | no | SELECT * detected - explicit column list recommended |
+| `having_top_spenders.sql` | <file> | SELECT_STAR | warning | no | SELECT * detected - explicit column list recommended |
+| `having_top_spenders.sql` | <file> | MISSING_SOURCE_VERSION | info | no | Filename 'having_top_spenders.sql' has fewer than 3 hyphen-separated parts; m... |
+| `nested_union_except.sql` | <file> | MISSING_ALIAS | info | no | Table 'orders' has no alias in multi-table query |
+| `nested_union_except.sql` | <file> | MISSING_ALIAS | info | no | Table 'customer' has no alias in multi-table query |
+| `nested_union_except.sql` | <file> | MISSING_ALIAS | info | no | Table 'orders' has no alias in multi-table query |
+| `nested_union_except.sql` | <file> | MISSING_ALIAS | info | no | Table 'orders' has no alias in multi-table query |
+| `nested_union_except.sql` | <file> | HARDCODED_DATE | info | no | Hardcoded date literal: '2024-01-01' |
+| `nested_union_except.sql` | <file> | INLINE_UNION_TRANSFORM | warning | no | WHERE clause inside UNION ALL branch |
+| `nested_union_except.sql` | <file> | INLINE_UNION_TRANSFORM | warning | no | WHERE clause inside UNION ALL branch |
+| `nested_union_except.sql` | <file> | INLINE_UNION_TRANSFORM | warning | no | WHERE clause inside UNION ALL branch |
+| `nested_union_except.sql` | <file> | MISSING_SOURCE_VERSION | info | no | Filename 'nested_union_except.sql' has fewer than 3 hyphen-separated parts; m... |
+| `ordered_top_customers.sql` | <file> | MISSING_SOURCE_VERSION | info | no | Filename 'ordered_top_customers.sql' has fewer than 3 hyphen-separated parts;... |
 | `passthrough_with_loans.sql` | <file> | SELECT_STAR | warning | no | SELECT * detected - explicit column list recommended |
 | `passthrough_with_loans.sql` | <file> | SELECT_STAR | warning | no | SELECT * detected - explicit column list recommended |
 | `passthrough_with_loans.sql` | <file> | MISSING_ALIAS | info | no | Table 'customer' has no alias in multi-table query |
@@ -121,7 +141,7 @@ Files processed: **16**
 
 ## Mapping coverage
 
-**99/105** output columns have a resolved source attribute (94%)
+**110/118** output columns have a resolved source attribute (93%)
 
 ## Cross-file lineage
 
@@ -157,8 +177,12 @@ flowchart LR
     customer_revenue["customer_revenue<br/><i>customer_revenue_bad.sql</i>"]
     customer_segment_analytics["customer_segment_analytics<br/><i>customer_segment_analytics.sql</i>"]
     customer_subqueries["customer_subqueries<br/><i>customer_subqueries.sql</i>"]
+    distinct_customers["distinct_customers<br/><i>distinct_customers.sql</i>"]
     except_subscribed_customers["except_subscribed_customers<br/><i>except_subscribed_customers.sql</i>"]
     filtered_high_value["filtered_high_value<br/><i>filtered_high_value.sql</i>"]
+    having_top_spenders["having_top_spenders<br/><i>having_top_spenders.sql</i>"]
+    nested_union_except["nested_union_except<br/><i>nested_union_except.sql</i>"]
+    ordered_top_customers["ordered_top_customers<br/><i>ordered_top_customers.sql</i>"]
     passthrough_with_loans["passthrough_with_loans<br/><i>passthrough_with_loans.sql</i>"]
     predicate_subqueries["predicate_subqueries<br/><i>predicate_subqueries.sql</i>"]
     source_derivations["source_derivations<br/><i>source_derivations.sql</i>"]
@@ -186,8 +210,12 @@ flowchart LR
   ext_landing_crm_customers_export --> raw_customers
   ext_landing_oms_orders_export --> raw_orders
   ext_raw_customer --> agg_customer_summary
+  ext_raw_customer --> distinct_customers
   ext_raw_customer --> except_subscribed_customers
   ext_raw_customer --> filtered_high_value
+  ext_raw_customer --> having_top_spenders
+  ext_raw_customer --> nested_union_except
+  ext_raw_customer --> ordered_top_customers
   ext_raw_customer --> passthrough_with_loans
   ext_raw_customer --> predicate_subqueries
   ext_raw_customer --> source_derivations
@@ -197,6 +225,9 @@ flowchart LR
   ext_raw_orders --> agg_customer_summary
   ext_raw_orders --> except_subscribed_customers
   ext_raw_orders --> filtered_high_value
+  ext_raw_orders --> having_top_spenders
+  ext_raw_orders --> nested_union_except
+  ext_raw_orders --> ordered_top_customers
   ext_raw_orders --> predicate_subqueries
   ext_raw_orders --> source_derivations
   ext_raw_orders --> union_revenue_breakdown
@@ -213,8 +244,12 @@ flowchart LR
 | `customer_revenue_bad.sql` | customer_revenue | 1 | pk |
 | `customer_segment_analytics.sql` | customer_segment_analytics | 1 | derived |
 | `customer_subqueries.sql` | customer_subqueries | 0 | — |
+| `distinct_customers.sql` | distinct_customers | 0 | — |
 | `except_subscribed_customers.sql` | except_subscribed_customers | 0 | — |
 | `filtered_high_value.sql` | filtered_high_value | 0 | — |
+| `having_top_spenders.sql` | having_top_spenders | 0 | — |
+| `nested_union_except.sql` | nested_union_except | 0 | — |
+| `ordered_top_customers.sql` | ordered_top_customers | 0 | — |
 | `passthrough_with_loans.sql` | passthrough_with_loans | 0 | — |
 | `predicate_subqueries.sql` | predicate_subqueries | 0 | — |
 | `raw_customers.sql` | raw_customers | 5 | business_key, nullable, pii, pk |

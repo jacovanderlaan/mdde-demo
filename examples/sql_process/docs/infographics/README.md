@@ -24,6 +24,24 @@ visuals (Figma / external designer).
 
 Together: shape → verification → integration.
 
+## Rendering the Mermaid sources
+
+Each brief has a companion `.mmd` file with a Mermaid flowchart that
+captures the same content as the brief's ASCII diagram. Render with:
+
+```bash
+# Mermaid CLI (npm i -g @mermaid-js/mermaid-cli)
+mmdc -i 01-layer-model.mmd -o 01-layer-model.png -w 1800
+
+# Or paste into https://mermaid.live/ to render interactively
+# Or import into draw.io: Arrange → Insert → Advanced → Mermaid
+```
+
+The `.mmd` sources are styled with colour classes that map to the
+layer/concern model (blue=source, purple=joined, amber=filtered,
+orange=aggregated, green=branch, red=final). Adjust the
+`classDef` lines if your handover deck uses a different palette.
+
 ## Conventions
 
 Each brief follows the same outline:

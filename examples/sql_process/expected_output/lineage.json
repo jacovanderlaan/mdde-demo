@@ -824,6 +824,76 @@
       "schemaURL": "https://openlineage.io/spec/2-0-2/OpenLineage.json#/definitions/RunEvent",
       "job": {
         "namespace": "mdde-demo.sql_process",
+        "name": "distinct_customers"
+      },
+      "inputs": [
+        {
+          "namespace": "mdde-demo.sql_process",
+          "name": "raw.customer"
+        }
+      ],
+      "outputs": [
+        {
+          "namespace": "mdde-demo.sql_process",
+          "name": "distinct_customers",
+          "facets": {
+            "schema": {
+              "fields": [
+                {
+                  "name": "customer_id",
+                  "type": "INFERRED"
+                },
+                {
+                  "name": "email",
+                  "type": "INFERRED"
+                },
+                {
+                  "name": "email_domain",
+                  "type": "INFERRED"
+                }
+              ]
+            },
+            "columnLineage": {
+              "fields": {
+                "customer_id": {
+                  "inputFields": [
+                    {
+                      "namespace": "mdde-demo.sql_process",
+                      "name": "c",
+                      "field": "customer_id"
+                    }
+                  ]
+                },
+                "email": {
+                  "inputFields": [
+                    {
+                      "namespace": "mdde-demo.sql_process",
+                      "name": "c",
+                      "field": "email"
+                    }
+                  ]
+                },
+                "email_domain": {
+                  "inputFields": [
+                    {
+                      "namespace": "mdde-demo.sql_process",
+                      "name": "c",
+                      "field": "email"
+                    }
+                  ]
+                }
+              }
+            }
+          }
+        }
+      ]
+    },
+    {
+      "eventType": "COMPLETE",
+      "producer": "mdde-demo://examples/sql_process",
+      "schemaURL": "https://openlineage.io/spec/2-0-2/OpenLineage.json#/definitions/RunEvent",
+      "job": {
+        "namespace": "mdde-demo.sql_process",
         "name": "except_subscribed_customers"
       },
       "inputs": [
@@ -957,6 +1027,229 @@
                       "namespace": "mdde-demo.sql_process",
                       "name": "o",
                       "field": "amount"
+                    }
+                  ]
+                }
+              }
+            }
+          }
+        }
+      ]
+    },
+    {
+      "eventType": "COMPLETE",
+      "producer": "mdde-demo://examples/sql_process",
+      "schemaURL": "https://openlineage.io/spec/2-0-2/OpenLineage.json#/definitions/RunEvent",
+      "job": {
+        "namespace": "mdde-demo.sql_process",
+        "name": "having_top_spenders"
+      },
+      "inputs": [
+        {
+          "namespace": "mdde-demo.sql_process",
+          "name": "raw.customer"
+        },
+        {
+          "namespace": "mdde-demo.sql_process",
+          "name": "raw.orders"
+        }
+      ],
+      "outputs": [
+        {
+          "namespace": "mdde-demo.sql_process",
+          "name": "having_top_spenders",
+          "facets": {
+            "schema": {
+              "fields": [
+                {
+                  "name": "customer_id",
+                  "type": "INFERRED"
+                },
+                {
+                  "name": "country",
+                  "type": "INFERRED"
+                },
+                {
+                  "name": "total_revenue",
+                  "type": "INFERRED"
+                },
+                {
+                  "name": "order_count",
+                  "type": "INFERRED"
+                }
+              ]
+            },
+            "columnLineage": {
+              "fields": {
+                "customer_id": {
+                  "inputFields": [
+                    {
+                      "namespace": "mdde-demo.sql_process",
+                      "name": "c",
+                      "field": "customer_id"
+                    }
+                  ]
+                },
+                "country": {
+                  "inputFields": [
+                    {
+                      "namespace": "mdde-demo.sql_process",
+                      "name": "c",
+                      "field": "country"
+                    }
+                  ]
+                },
+                "total_revenue": {
+                  "inputFields": [
+                    {
+                      "namespace": "mdde-demo.sql_process",
+                      "name": "o",
+                      "field": "amount"
+                    }
+                  ]
+                },
+                "order_count": {
+                  "inputFields": []
+                }
+              }
+            }
+          }
+        }
+      ]
+    },
+    {
+      "eventType": "COMPLETE",
+      "producer": "mdde-demo://examples/sql_process",
+      "schemaURL": "https://openlineage.io/spec/2-0-2/OpenLineage.json#/definitions/RunEvent",
+      "job": {
+        "namespace": "mdde-demo.sql_process",
+        "name": "nested_union_except"
+      },
+      "inputs": [
+        {
+          "namespace": "mdde-demo.sql_process",
+          "name": "raw.orders"
+        },
+        {
+          "namespace": "mdde-demo.sql_process",
+          "name": "raw.customer"
+        }
+      ],
+      "outputs": [
+        {
+          "namespace": "mdde-demo.sql_process",
+          "name": "nested_union_except",
+          "facets": {
+            "schema": {
+              "fields": [
+                {
+                  "name": "customer_id",
+                  "type": "INFERRED"
+                },
+                {
+                  "name": "channel",
+                  "type": "INFERRED"
+                }
+              ]
+            },
+            "columnLineage": {
+              "fields": {
+                "customer_id": {
+                  "inputFields": [
+                    {
+                      "namespace": "mdde-demo.sql_process",
+                      "name": "orders",
+                      "field": "customer_id"
+                    }
+                  ]
+                },
+                "channel": {
+                  "inputFields": []
+                }
+              }
+            }
+          }
+        }
+      ]
+    },
+    {
+      "eventType": "COMPLETE",
+      "producer": "mdde-demo://examples/sql_process",
+      "schemaURL": "https://openlineage.io/spec/2-0-2/OpenLineage.json#/definitions/RunEvent",
+      "job": {
+        "namespace": "mdde-demo.sql_process",
+        "name": "ordered_top_customers"
+      },
+      "inputs": [
+        {
+          "namespace": "mdde-demo.sql_process",
+          "name": "raw.customer"
+        },
+        {
+          "namespace": "mdde-demo.sql_process",
+          "name": "raw.orders"
+        }
+      ],
+      "outputs": [
+        {
+          "namespace": "mdde-demo.sql_process",
+          "name": "ordered_top_customers",
+          "facets": {
+            "schema": {
+              "fields": [
+                {
+                  "name": "customer_id",
+                  "type": "INFERRED"
+                },
+                {
+                  "name": "country",
+                  "type": "INFERRED"
+                },
+                {
+                  "name": "amount",
+                  "type": "INFERRED"
+                },
+                {
+                  "name": "order_date",
+                  "type": "INFERRED"
+                }
+              ]
+            },
+            "columnLineage": {
+              "fields": {
+                "customer_id": {
+                  "inputFields": [
+                    {
+                      "namespace": "mdde-demo.sql_process",
+                      "name": "c",
+                      "field": "customer_id"
+                    }
+                  ]
+                },
+                "country": {
+                  "inputFields": [
+                    {
+                      "namespace": "mdde-demo.sql_process",
+                      "name": "c",
+                      "field": "country"
+                    }
+                  ]
+                },
+                "amount": {
+                  "inputFields": [
+                    {
+                      "namespace": "mdde-demo.sql_process",
+                      "name": "o",
+                      "field": "amount"
+                    }
+                  ]
+                },
+                "order_date": {
+                  "inputFields": [
+                    {
+                      "namespace": "mdde-demo.sql_process",
+                      "name": "o",
+                      "field": "order_date"
                     }
                   ]
                 }

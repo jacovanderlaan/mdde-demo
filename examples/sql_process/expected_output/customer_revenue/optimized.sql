@@ -66,4 +66,4 @@ SELECT
   avg_order_value
 FROM customer_revenue_clean_joined
 ORDER BY
-  t.total_revenue DESC;
+  total_revenue DESC;

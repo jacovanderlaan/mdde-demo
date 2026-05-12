@@ -1,0 +1,5 @@
+"target_model_name","target_table_name","target_column_name","source_model_name","source_table_name","source_column_name","derived_indicator","movement_expression","dependency_type","source_version"
+"Converter","ordered_top_customers","customer_id","RAW","customer","customer_id","false","c.customer_id AS customer_id","strict",""
+"Converter","ordered_top_customers","country","RAW","customer","country","false","c.country AS country","strict",""
+"Converter","ordered_top_customers","amount","RAW","orders","amount","false","o.amount AS amount","strict",""
+"Converter","ordered_top_customers","order_date","RAW","orders","order_date","false","o.order_date AS order_date","strict",""

@@ -12,10 +12,12 @@ Migration Details:
 - Summary of Changes:
   - Pushed single-table projections and filters into per-source `_filtered` / `_prepared` CTEs.
   - Lifted JOINs and multi-source derivations into a dedicated `_joined` CTE; outer SELECT reads from a single-table FROM.
+  - Rewrote table qualifiers (catalog/schema) to the target qualifier.
 
 Validation Checklist:
 - [X] Modular CTE structure applied.
 - [X] JOIN isolated into joined CTE.
+- [X] Table qualifiers normalised.
 */
 
 WITH customer_prepared AS (
@@ -24,7 +26,7 @@ WITH customer_prepared AS (
     UPPER(TRIM(email)) AS email_clean,
     SUBSTRING(email, STR_POSITION(email, '@') + 1) AS email_domain,
     country AS country
-  FROM customer
+  FROM schema_identifier_ssf_snapshot.customer
 ), orders_prepared AS (
   SELECT
     order_date AS order_date,
@@ -34,7 +36,7 @@ WITH customer_prepared AS (
     amount,
     customer_id,
     order_id
-  FROM orders
+  FROM schema_identifier_ssf_snapshot.orders
 ), source_derivations_joined AS (
   SELECT
     customer_id,

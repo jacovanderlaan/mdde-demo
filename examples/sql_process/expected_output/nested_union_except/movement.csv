@@ -1,0 +1,4 @@
+"target_model_name","target_table_name","target_column_name","source_model_name","source_table_name","source_column_name","derived_indicator","movement_expression","dependency_type","source_version"
+"Converter","nested_union_except","customer_id","RAW","orders","customer_id","false","orders.customer_id AS customer_id","strict",""
+"Converter","nested_union_except","channel","SSF","","","true","'churned' AS channel","strict",""
+"Converter","nested_union_except","","RAW","customer","","false","","strict",""

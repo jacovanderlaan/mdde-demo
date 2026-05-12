@@ -11,9 +11,11 @@ Migration Details:
 - Target SQL File:  optimized.sql
 - Summary of Changes:
   - Lifted each `UNION ALL` branch into its own CTE; top-level statement is a pure `SELECT * FROM cte_a UNION ALL SELECT * FROM cte_b ...`.
+  - Rewrote table qualifiers (catalog/schema) to the target qualifier.
 
 Validation Checklist:
 - [X] UNION branches lifted to CTEs.
+- [X] Table qualifiers normalised.
 */
 
 WITH web AS (
@@ -22,7 +24,7 @@ WITH web AS (
       customer_id AS customer_id,
       order_date AS order_date,
       amount AS amount
-    FROM orders
+    FROM schema_identifier_ssf_snapshot.orders
     WHERE
       channel = 'WEB'
   )
@@ -39,7 +41,7 @@ WITH web AS (
       customer_id AS customer_id,
       order_date AS order_date,
       amount AS amount
-    FROM orders
+    FROM schema_identifier_ssf_snapshot.orders
     WHERE
       channel = 'STORE'
   )

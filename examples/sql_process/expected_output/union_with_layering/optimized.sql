@@ -13,11 +13,13 @@ Migration Details:
   - Lifted JOINs and multi-source derivations into a dedicated `_joined` CTE; outer SELECT reads from a single-table FROM.
   - Lifted aggregates and GROUP BY into a dedicated `_aggregated` CTE; outer SELECT applies casting / defaulting only.
   - Lifted each `UNION ALL` branch into its own CTE; top-level statement is a pure `SELECT * FROM cte_a UNION ALL SELECT * FROM cte_b ...`.
+  - Rewrote table qualifiers (catalog/schema) to the target qualifier.
 
 Validation Checklist:
 - [X] JOIN isolated into joined CTE.
 - [X] Aggregation isolated from formatting.
 - [X] UNION branches lifted to CTEs.
+- [X] Table qualifiers normalised.
 */
 
 WITH web AS (
@@ -25,12 +27,12 @@ WITH web AS (
     SELECT
       country AS country,
       customer_id
-    FROM customer
+    FROM schema_identifier_ssf_snapshot.customer
   ), orders_filtered AS (
     SELECT
       amount,
       customer_id
-    FROM orders
+    FROM schema_identifier_ssf_snapshot.orders
     WHERE
       channel = 'WEB'
   ), web_joined AS (
@@ -61,12 +63,12 @@ WITH web AS (
     SELECT
       country AS country,
       customer_id
-    FROM customer
+    FROM schema_identifier_ssf_snapshot.customer
   ), orders_filtered AS (
     SELECT
       amount,
       customer_id
-    FROM orders
+    FROM schema_identifier_ssf_snapshot.orders
     WHERE
       channel = 'STORE'
   ), store_joined AS (

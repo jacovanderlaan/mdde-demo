@@ -1,0 +1,40 @@
+%% Infographic 03 — CTE Notebook: Pipeline-Level Mapping in One YAML
+%% Render with: mermaid-cli, draw.io, or any Mermaid-compatible tool
+%% Source brief: 03-cte-notebook.md
+
+flowchart LR
+    classDef sql fill:#dbeafe,stroke:#1e40af,color:#1e3a8a
+    classDef yaml fill:#fef3c7,stroke:#92400e,color:#78350f
+    classDef gov fill:#bbf7d0,stroke:#166534,color:#14532d
+
+    subgraph LEFT["📜 optimized.sql"]
+        SQL_C1["customer_prepared AS (...)"]:::sql
+        SQL_C2["agg_..._joined AS (...)"]:::sql
+        SQL_C3["agg_..._aggregated AS (...)"]:::sql
+        SQL_FINAL["SELECT<br/>&nbsp;&nbsp;CAST(amount_sum AS …),<br/>&nbsp;&nbsp;COALESCE(country, 'unknown')<br/>FROM agg_..._aggregated"]:::sql
+        SQL_C1 -.-> SQL_C2 -.-> SQL_C3 -.-> SQL_FINAL
+    end
+
+    subgraph RIGHT["📄 mapping.cte.yaml"]
+        Y_HEAD["target: agg_customer_summary<br/>version: 1.0.0<br/>layer: business<br/>stereotype: aggregate"]:::yaml
+        Y_CTES["ctes:<br/>&nbsp;&nbsp;- customer_prepared<br/>&nbsp;&nbsp;- agg_..._joined<br/>&nbsp;&nbsp;- agg_..._aggregated"]:::yaml
+        Y_SOURCES["sources:<br/>&nbsp;&nbsp;- raw.customer<br/>&nbsp;&nbsp;- raw.orders"]:::yaml
+        Y_OUTPUTS["outputs:<br/>&nbsp;&nbsp;- name: customer_id<br/>&nbsp;&nbsp;&nbsp;&nbsp;derivation: PASSTHROUGH<br/>&nbsp;&nbsp;- name: total_revenue<br/>&nbsp;&nbsp;&nbsp;&nbsp;derivation: AGGREGATE_THEN_CAST<br/>&nbsp;&nbsp;- name: country_clean<br/>&nbsp;&nbsp;&nbsp;&nbsp;derivation: EXPRESSION"]:::yaml
+        Y_CONTRACT["contract:<br/>&nbsp;&nbsp;owner: &lt;unknown&gt;<br/>&nbsp;&nbsp;freshness_minutes: 60<br/>&nbsp;&nbsp;primary_key: [customer_id]"]:::yaml
+    end
+
+    SQL_C1 ---|maps to| Y_CTES
+    SQL_C3 ---|maps to| Y_SOURCES
+    SQL_FINAL ---|maps to| Y_OUTPUTS
+
+    subgraph CONSUMERS["📊 Downstream consumers"]
+        CATALOG["Data Catalog<br/>(Collibra, Datahub)"]:::gov
+        LINEAGE["Lineage Tool<br/>(OpenLineage)"]:::gov
+        DBT["dbt project sync"]:::gov
+        VALIDATE["Contract validation<br/>(freshness, PK enforcement)"]:::gov
+    end
+
+    Y_HEAD --> CATALOG
+    Y_OUTPUTS --> LINEAGE
+    Y_CTES --> DBT
+    Y_CONTRACT --> VALIDATE

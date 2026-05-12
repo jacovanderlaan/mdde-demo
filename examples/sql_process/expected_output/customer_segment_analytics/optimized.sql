@@ -107,4 +107,4 @@ SELECT
   segment
 FROM customer_segment_analytics_joined
 ORDER BY
-  rc.revenue_rank;
+  revenue_rank;

@@ -27,7 +27,7 @@ WITH customer_prepared AS (
     customer_id AS customer_id,
     email AS email,
     country AS country
-  FROM customer
+  FROM schema_identifier_ssf_snapshot.customer
 ), _sub1 AS (
   SELECT
     o.customer_id
