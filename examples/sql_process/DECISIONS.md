@@ -780,6 +780,25 @@ the source layer and inspired the rest of the pattern.
 - **Fail-soft:** if recursive layering fails on a branch (parse error, transform crash), the un-layered branch is used as-is — never produces broken SQL.
 - **Reflected in code at:** the branch-processing loop in `extract_union_branches_to_ctes()`.
 
+### D52. DISTINCT → ROW_NUMBER + filter pattern (2026-05-12)
+
+- **Question:** the customer rule pack flags `SELECT DISTINCT` as a code-smell that hides data-quality issues. Should the auto-fix replace DISTINCT with an explicit deduplication pattern?
+- **Decision:** yes. Replace every plain `SELECT DISTINCT proj1, proj2, ...` with a two-CTE pattern:
+  1. `<entity>_ranked` — original SELECT (without DISTINCT) plus a `ROW_NUMBER() OVER (PARTITION BY <all projection columns> ORDER BY (SELECT NULL)) AS rn` column.
+  2. `<entity>_deduped` — `SELECT <projection_list> FROM <entity>_ranked WHERE rn = 1`.
+  The outer SELECT becomes `SELECT * FROM <entity>_deduped` plus any `ORDER BY` / `LIMIT` from the original.
+- **Why it matters:** DISTINCT silently swallows duplicate rows. The explicit ROW_NUMBER pattern (a) makes duplication count-able (analysts can `SELECT * FROM <entity>_ranked WHERE rn > 1` to see what was removed), (b) gives a deterministic tie-break hook for "latest wins" / "highest wins" by changing the window's ORDER BY, and (c) maps onto the layered CTE model (ranked / deduped are dedicated single-concern layers).
+- **Scope limits:**
+  - `SELECT DISTINCT *` — left as-is, emits `DISTINCT_NOT_REWRITTEN` info finding (partition-by would be unspecified).
+  - `SELECT DISTINCT ON (...)` (Postgres) — left as-is; different semantics, the rewrite would need an explicit `ORDER BY` we can't safely infer.
+  - `COUNT(DISTINCT x)` / function-arg DISTINCT — unaffected (this rule targets SELECT-level DISTINCT only).
+- **Order in pipeline:** runs AFTER subquery-lifting (so inner shapes settle) but BEFORE source-CTE pushdown (so the downstream layering treats the deduped CTE as its FROM).
+- **Why `ORDER BY (SELECT NULL)`:** the deduplication is semantically order-independent — picking any row per partition gives the same result-set as DISTINCT. `(SELECT NULL)` is a parser-friendly way to say "no ordering" without picking an arbitrary column that would imply intent. Analysts who want a deterministic dedup can swap this for `ORDER BY <tie_break_col>`.
+- **Rejected alternatives:**
+  - "Add a single CTE with `WHERE rn = 1` inline" — fewer layers but the dedup isn't visible as a separate step.
+  - "Only rewrite DISTINCT when no aggregates are present" — too cautious; the customer wants the rule applied uniformly.
+- **Reflected in code at:** `replace_distinct_with_rownum()` + `TransformLog.distinct_rewritten` + the `Replace DISTINCT with explicit dedup` Genie rule.
+
 ### D49. Passthrough-CTE rewrite (2026-05-12)
 
 - **Question:** Customer's hand-rolled CTEs are sometimes thin wrappers: `WITH x AS (SELECT * FROM real_table)`. Should pushdown go INTO `x`'s body or add a sibling CTE?

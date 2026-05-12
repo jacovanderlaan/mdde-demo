@@ -14,7 +14,7 @@
 
 ## Visual concept
 
-A vertical flow from top to bottom, five layers stacked. Each layer is one horizontal band. Inside each band:
+A vertical flow from top to bottom. Six potential layers (depending on what the input query needs). Each layer is one horizontal band. Inside each band:
 
 1. Left third — layer name + CTE naming pattern, large
 2. Middle third — one-sentence concern statement
@@ -23,6 +23,30 @@ A vertical flow from top to bottom, five layers stacked. Each layer is one horiz
 Connections between layers are downward arrows. The visual must communicate "input flows down through the layers; each layer only adds its own concern".
 
 ```
+┌─────────────────────────────────────────────────────────────────────────┐
+│  0. DEDUP LAYER  (only when input has SELECT DISTINCT)                  │
+│     <entity>_ranked + <entity>_deduped                                  │
+│     "How are duplicates resolved?"                                      │
+│     • ROW_NUMBER() OVER (PARTITION BY all_projection_cols               │
+│                          ORDER BY (SELECT NULL)) AS rn                  │
+│     • A separate CTE filters WHERE rn = 1                               │
+│     • Replaces every SELECT DISTINCT; makes duplicate                   │
+│       inspection possible (`SELECT * FROM <entity>_ranked               │
+│       WHERE rn > 1`)                                                    │
+│                                                                         │
+│     WITH customers_ranked AS (                                          │
+│       SELECT customer_id, email, country,                               │
+│              ROW_NUMBER() OVER (                                        │
+│                PARTITION BY customer_id, email, country                 │
+│                ORDER BY (SELECT NULL)) AS rn                            │
+│       FROM raw.customer                                                 │
+│     ), customers_deduped AS (                                           │
+│       SELECT customer_id, email, country                                │
+│       FROM customers_ranked WHERE rn = 1                                │
+│     )                                                                   │
+└─────────────────────────────────────────────────────────────────────────┘
+                                  │
+                                  ▼
 ┌─────────────────────────────────────────────────────────────────────────┐
 │  1. SOURCE LAYER                                                        │
 │     <table>_prepared / <table>_filtered                                 │

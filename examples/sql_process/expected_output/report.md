@@ -1,6 +1,6 @@
 # sql_process — run report
 
-Files processed: **32**
+Files processed: **33**
 
 ## Files
 
@@ -21,6 +21,7 @@ Files processed: **32**
 | `customer_segment_analytics.sql` | customer_segment_analytics | business | yes | 3 | 2 | 10 | 10 |
 | `customer_subqueries.sql` | customer_subqueries | business | yes | 0 | 2 | 7 | 12 |
 | `distinct_customers.sql` | distinct_customers | business | yes | 0 | 1 | 3 | 3 |
+| `distinct_multi_column.sql` | distinct_multi_column | business | yes | 0 | 2 | 3 | 2 |
 | `except_subscribed_customers.sql` | except_subscribed_customers | business | yes | 0 | 2 | 2 | 2 |
 | `filtered_high_value.sql` | filtered_high_value | business | yes | 0 | 2 | 4 | 2 |
 | `having_top_spenders.sql` | having_top_spenders | business | yes | 0 | 2 | 4 | 3 |
@@ -41,7 +42,7 @@ Files processed: **32**
 
 ## Quality findings
 
-**Total:** 189 (error=6, warning=54, info=129)  
+**Total:** 191 (error=6, warning=54, info=131)  
 **Auto-fixed:** 4
 
 | File | Location | Rule | Severity | Auto-fixed | Message |
@@ -162,6 +163,8 @@ Files processed: **32**
 | `distinct_customers.sql` | <file> | DERIVATION_IN_WHERE | info | no | IS [NOT] NULL on raw column 'email' inside WHERE |
 | `distinct_customers.sql` | <file> | DISTINCT_WITHOUT_JUSTIFICATION | info | no | DISTINCT used without a justifying comment |
 | `distinct_customers.sql` | <file> | MISSING_SOURCE_VERSION | info | no | Filename 'distinct_customers.sql' has fewer than 3 hyphen-separated parts; mo... |
+| `distinct_multi_column.sql` | <file> | DISTINCT_WITHOUT_JUSTIFICATION | info | no | DISTINCT used without a justifying comment |
+| `distinct_multi_column.sql` | <file> | MISSING_SOURCE_VERSION | info | no | Filename 'distinct_multi_column.sql' has fewer than 3 hyphen-separated parts;... |
 | `except_subscribed_customers.sql` | <file> | DERIVATION_IN_WHERE | info | no | IS [NOT] NULL on raw column 'email' inside WHERE |
 | `except_subscribed_customers.sql` | <file> | MISSING_SOURCE_VERSION | info | no | Filename 'except_subscribed_customers.sql' has fewer than 3 hyphen-separated ... |
 | `filtered_high_value.sql` | <file> | COMBINED_SOURCE_FILTERS | info | no | WHERE clause references columns from 2 sources (c, o) |
@@ -238,7 +241,7 @@ Files processed: **32**
 
 ## Mapping coverage
 
-**175/191** output columns have a resolved source attribute (92%)
+**178/194** output columns have a resolved source attribute (92%)
 
 ## Cross-file lineage
 
@@ -283,6 +286,7 @@ flowchart LR
     customer_segment_analytics["customer_segment_analytics<br/><i>customer_segment_analytics.sql</i>"]
     customer_subqueries["customer_subqueries<br/><i>customer_subqueries.sql</i>"]
     distinct_customers["distinct_customers<br/><i>distinct_customers.sql</i>"]
+    distinct_multi_column["distinct_multi_column<br/><i>distinct_multi_column.sql</i>"]
     except_subscribed_customers["except_subscribed_customers<br/><i>except_subscribed_customers.sql</i>"]
     filtered_high_value["filtered_high_value<br/><i>filtered_high_value.sql</i>"]
     having_top_spenders["having_top_spenders<br/><i>having_top_spenders.sql</i>"]
@@ -328,6 +332,7 @@ flowchart LR
   ext_raw_customer --> combo_ssf_loan_aggregates
   ext_raw_customer --> combo_union_valuations
   ext_raw_customer --> distinct_customers
+  ext_raw_customer --> distinct_multi_column
   ext_raw_customer --> except_subscribed_customers
   ext_raw_customer --> filtered_high_value
   ext_raw_customer --> having_top_spenders
@@ -344,6 +349,7 @@ flowchart LR
   ext_raw_loans --> combo_filter_isolation
   ext_raw_loans --> combo_nested_predicate_subqueries
   ext_raw_loans --> combo_union_valuations
+  ext_raw_loans --> distinct_multi_column
   ext_raw_loans --> passthrough_with_loans
   ext_raw_loans --> predicate_subqueries
   ext_raw_orders --> agg_customer_summary
@@ -387,6 +393,7 @@ flowchart LR
 | `customer_segment_analytics.sql` | customer_segment_analytics | 1 | derived |
 | `customer_subqueries.sql` | customer_subqueries | 0 | — |
 | `distinct_customers.sql` | distinct_customers | 0 | — |
+| `distinct_multi_column.sql` | distinct_multi_column | 0 | — |
 | `except_subscribed_customers.sql` | except_subscribed_customers | 0 | — |
 | `filtered_high_value.sql` | filtered_high_value | 0 | — |
 | `having_top_spenders.sql` | having_top_spenders | 0 | — |

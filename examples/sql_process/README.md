@@ -464,10 +464,11 @@ engine. Currently:
 
 - `WHERE 1=1 AND ...` → `WHERE ...`
 - **Subquery → CTE lifting** including WHERE IN / EXISTS / EXCEPT, with correlated handling (see below)
+- **DISTINCT → ROW_NUMBER + filter pattern** (`SELECT DISTINCT ...` → `<entity>_ranked` + `<entity>_deduped` CTEs)
 - **Single-table projection pushdown** (renames + single-source value transforms + filters → source CTE; see below)
 - **Joined CTE extraction** (JOINs + multi-source derivations → `<entity>_joined`)
 - **Filtered CTE extraction** (cross-source WHERE predicates → `<entity>_filtered`)
-- **Aggregation CTE extraction** (SUM/MAX/... + GROUP BY → `<entity>_aggregated`)
+- **Aggregation CTE extraction** (SUM/MAX/... + GROUP BY + HAVING → `<entity>_aggregated`)
 - **UNION-branch lifting** (each branch → CTE with nested layered pipeline; top-level is a pure UNION ALL)
 - **Passthrough-CTE rewrite** (`WITH x AS (SELECT * FROM real_table)` body mutated in place)
 - Format normalisation via `sqlglot.transpile(pretty=True)`
@@ -482,12 +483,13 @@ flows through (some or all of) these layers, top to bottom:
 
 | Layer | CTE name pattern | What lives here |
 |---|---|---|
+| Ranked / Deduped (when DISTINCT) | `<entity>_ranked` + `<entity>_deduped` | ROW_NUMBER + WHERE rn = 1 replacing `SELECT DISTINCT` |
 | Source | `<table>_prepared` / `<table>_filtered` | Bare columns + renames + single-source non-cast transforms (UPPER, TRIM, arithmetic) + single-table filters |
 | Joined | `<entity>_joined` | JOIN(s) + multi-source derivations (no WHERE, no aggregation) |
 | Filtered | `<entity>_filtered` | Cross-source WHERE predicates (when joined CTE has any leftover WHERE) |
-| Aggregated | `<entity>_aggregated` | GROUP BY + aggregates only (no JOINs, no derivations, no WHERE) |
+| Aggregated | `<entity>_aggregated` | GROUP BY + aggregates + HAVING (no JOINs, no derivations, no WHERE) |
 | Branch CTEs | `<branch_tag>` or `<entity>_<n>` | Each UNION ALL branch becomes a CTE with its own nested layered pipeline inside |
-| Final SELECT | (no CTE — top level) | CAST + COALESCE + defaults + constants |
+| Final SELECT | (no CTE — top level) | CAST + COALESCE + NULLIF + CASE-with-default + constants + ORDER BY + LIMIT + window functions |
 
 Example end-to-end shape (see `expected_output/agg_customer_summary/optimized.sql`):
 
@@ -524,10 +526,18 @@ FROM agg_customer_summary_aggregated
 ```
 
 See `expected_output/union_revenue_breakdown/optimized.sql` for the
-UNION-branch pattern and
-`expected_output/passthrough_with_loans/optimized.sql` for the
-passthrough-CTE rewrite. Layer/concern rule is documented in
-`DECISIONS.md` (D46–D49).
+UNION-branch pattern, `expected_output/passthrough_with_loans/optimized.sql`
+for the passthrough-CTE rewrite, and `expected_output/distinct_customers/optimized.sql`
+for the DISTINCT-to-ROW_NUMBER pattern.
+
+Other notable fixtures:
+- `combo_ssf_loan_aggregates` — SSF banking shape with all 5 layers
+- `combo_casting_at_final_only` — confirms CAST / CASE / COALESCE always end up at the final SELECT
+- `combo_filter_isolation` — confirms cross-source filters get their own `_filtered` CTE
+- `combo_nested_predicate_subqueries` — IN-within-IN recursion
+- `union_with_layering` — UNION ALL where each branch is fully layered internally
+
+Layer/concern rule is documented in `DECISIONS.md` (D46–D52).
 
 ### Subquery → CTE lifting
 

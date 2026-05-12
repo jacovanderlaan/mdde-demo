@@ -12,6 +12,8 @@ flowchart TD
 
     INPUT["📥 Raw input SQL<br/>(customer-written, mixed concerns)"]
 
+    L0["<b>0. DEDUP LAYER (when SELECT DISTINCT)</b><br/><i>&lt;entity&gt;_ranked + &lt;entity&gt;_deduped</i><br/>━━━━━━━━━━━<br/><b>How are duplicates resolved?</b><br/>• ROW_NUMBER() OVER (PARTITION BY all_cols)<br/>• WHERE rn = 1 in a separate CTE<br/>• Replaces every SELECT DISTINCT"]:::source
+
     L1["<b>1. SOURCE LAYER</b><br/><i>&lt;table&gt;_prepared / &lt;table&gt;_filtered</i><br/>━━━━━━━━━━━<br/><b>What does this table expose?</b><br/>• Bare columns + renames<br/>• Single-source value transforms<br/>&nbsp;&nbsp;(UPPER, TRIM, arithmetic)<br/>• Single-table WHERE filters"]:::source
 
     L2["<b>2. JOINED LAYER</b><br/><i>&lt;entity&gt;_joined</i><br/>━━━━━━━━━━━<br/><b>How do these tables relate?</b><br/>• JOIN clauses<br/>• Multi-source derivations<br/>• No WHERE, no aggregation"]:::joined
@@ -24,7 +26,8 @@ flowchart TD
 
     L6["<b>6. FINAL SELECT</b><br/><i>(top-level — no CTE)</i><br/>━━━━━━━━━━━<br/><b>How is the result formatted?</b><br/>• CAST<br/>• COALESCE / NULLIF / IFNULL<br/>• CASE WHEN … THEN … ELSE …<br/>• Constants / literals<br/>• ORDER BY, LIMIT"]:::final
 
-    INPUT --> L1
+    INPUT --> L0
+    L0 --> L1
     L1 --> L2
     L2 --> L3
     L3 --> L4

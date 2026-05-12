@@ -820,6 +820,262 @@ def _make_cte_name(
     return name
 
 
+# -----------------------------------------------------------------------------
+# DISTINCT → ROW_NUMBER() dedup pattern
+# -----------------------------------------------------------------------------
+#
+# ``SELECT DISTINCT`` hides data-quality problems: it silently drops
+# duplicate rows without making the duplication visible. Replace with
+# an explicit two-CTE dedup so analysts can see how many rows were
+# duplicated, why, and pick a representative row deterministically:
+#
+#   ``<entity>_ranked``   — original SELECT + ROW_NUMBER() OVER
+#                            (PARTITION BY <all projection columns>
+#                             ORDER BY (SELECT NULL)) AS rn
+#   ``<entity>_deduped``  — SELECT <columns> FROM <ranked> WHERE rn = 1
+#
+# The top-level SELECT becomes ``SELECT * FROM <entity>_deduped`` plus
+# any ORDER BY / LIMIT from the original.
+#
+# Scope:
+#   - Plain ``SELECT DISTINCT col1, col2, ...``. The full projection
+#     list (after expanding ``*`` if metadata is available) becomes
+#     the PARTITION BY list.
+#   - ``SELECT DISTINCT *`` is left alone (a finding is emitted) —
+#     the partition-by would be unspecified.
+#   - ``SELECT DISTINCT ON (...)`` (Postgres) is left alone — has
+#     different semantics; the ROW_NUMBER pattern would need an
+#     explicit ORDER BY which isn't safe to infer.
+#   - DISTINCT inside aggregates (``COUNT(DISTINCT x)``) is unaffected
+#     — that's a function-arg distinct, not a SELECT-level one.
+
+
+def replace_distinct_with_rownum(
+    sql: str,
+    findings: List[QualityFinding],
+    entity_hint: str,
+    log: "TransformLog",
+) -> Tuple[str, List[QualityFinding]]:
+    """Rewrite ``SELECT DISTINCT ...`` as a two-CTE
+    ROW_NUMBER-then-filter pattern.
+
+    Customer rule: a plain DISTINCT is a code-smell hiding duplicate
+    rows. Replace with an explicit ranking-then-filtering pattern so
+    the deduplication is visible and inspectable.
+
+    Fires when the target SELECT has a non-ON DISTINCT modifier and
+    its projection list isn't ``*``. Skipped otherwise with a
+    ``DISTINCT_NOT_REWRITTEN`` info finding.
+
+    Safe-by-default: fail-soft on parse errors.
+    """
+    try:
+        statements = sqlglot.parse(sql, read=None)
+    except sqlglot.errors.ParseError:
+        return sql, findings
+    if not statements or statements[0] is None:
+        return sql, findings
+
+    root = statements[0]
+    if isinstance(root, exp.Create) and root.this:
+        target = root.expression or root.this
+    elif isinstance(root, exp.Select):
+        target = root
+    else:
+        target = root.find(exp.Select) if hasattr(root, "find") else None
+    if not isinstance(target, exp.Select):
+        return sql, findings
+
+    distinct = target.args.get("distinct")
+    if distinct is None:
+        return sql, findings
+
+    # Skip DISTINCT ON (...) — different semantics.
+    if isinstance(distinct, exp.Distinct) and distinct.args.get("on"):
+        findings.append(QualityFinding(
+            rule="DISTINCT_NOT_REWRITTEN",
+            severity="info",
+            location="<distinct-on>",
+            message=(
+                "SELECT DISTINCT ON (...) left as-is — different "
+                "semantics from plain DISTINCT; the ROW_NUMBER "
+                "rewrite needs an explicit ORDER BY this transform "
+                "won't invent."
+            ),
+        ))
+        return sql, findings
+
+    # Skip SELECT DISTINCT * — no projection list to partition on.
+    projections = target.expressions or []
+    if any(isinstance(p, exp.Star) for p in projections):
+        findings.append(QualityFinding(
+            rule="DISTINCT_NOT_REWRITTEN",
+            severity="info",
+            location="<distinct-star>",
+            message=(
+                "SELECT DISTINCT * left as-is — the ROW_NUMBER "
+                "pattern needs an explicit projection list to "
+                "partition on."
+            ),
+        ))
+        return sql, findings
+    if not projections:
+        return sql, findings
+
+    ranked_name = f"{entity_hint}_ranked"
+    deduped_name = f"{entity_hint}_deduped"
+
+    # Pick a unique rn column name in case the projection already
+    # has a column called `rn`.
+    rn_col = "rn"
+    existing_aliases: Set[str] = set()
+    for p in projections:
+        if isinstance(p, exp.Alias):
+            existing_aliases.add(p.alias)
+        elif isinstance(p, exp.Column):
+            existing_aliases.add(p.name)
+    counter = 2
+    while rn_col in existing_aliases:
+        rn_col = f"rn_{counter}"
+        counter += 1
+
+    # Build the PARTITION BY list from the projection list. For each
+    # projection, the partition-by argument is its OUTPUT column
+    # (after rename) — which is just a column reference inside the
+    # ranking SELECT itself. So `PARTITION BY a, b, AS_alias` →
+    # `PARTITION BY a, b, AS_alias`. Strip qualifiers so the
+    # references resolve in the ranking CTE's own scope.
+    partition_cols: List[exp.Expression] = []
+    output_col_names: List[str] = []
+    for p in projections:
+        if isinstance(p, exp.Alias):
+            out_name = p.alias
+        elif isinstance(p, exp.Column):
+            out_name = p.name
+        else:
+            # Bare expression in DISTINCT projection (e.g.,
+            # SELECT DISTINCT UPPER(email)) — partition on it
+            # by its position alias. We'll alias it for
+            # determinism.
+            out_name = f"col_{len(output_col_names) + 1}"
+        output_col_names.append(out_name)
+        partition_cols.append(exp.column(out_name))
+
+    # The ranked CTE's body: the ORIGINAL select, with:
+    #  - DISTINCT removed
+    #  - ROW_NUMBER appended as an extra projection
+    #  - All projections aliased to their output names so PARTITION
+    #    BY can reference them
+    ranked_body = target.copy()
+    ranked_body.set("distinct", None)
+    ranked_body.set("order", None)  # ORDER BY moves to outer
+    ranked_body.set("limit", None)  # LIMIT moves to outer
+    ranked_body.set("offset", None)
+    # Re-alias each projection so the output-column names are stable.
+    new_projs: List[exp.Expression] = []
+    for orig, out_name in zip(projections, output_col_names):
+        if isinstance(orig, exp.Alias):
+            new_projs.append(orig.copy())
+        elif isinstance(orig, exp.Column) and orig.name == out_name:
+            new_projs.append(orig.copy())
+        else:
+            new_projs.append(exp.alias_(orig.copy(), out_name))
+    # Append the ROW_NUMBER projection.
+    rn_expr = exp.alias_(
+        exp.Window(
+            this=exp.RowNumber(),
+            partition_by=[c.copy() for c in partition_cols],
+            order=exp.Order(
+                expressions=[
+                    exp.Ordered(this=exp.Subquery(
+                        this=exp.Select(
+                            expressions=[exp.Null()],
+                        )
+                    ))
+                ],
+            ),
+        ),
+        rn_col,
+    )
+    new_projs.append(rn_expr)
+    ranked_body.set("expressions", new_projs)
+
+    # Existing WITH clause on the original — we'll re-attach it on the
+    # NEW outer SELECT instead, so the ranked CTE sees it via scoping.
+    original_with = target.args.get("with_")
+    ranked_body.set("with_", None)
+
+    # Build the deduped CTE.
+    deduped_body = exp.Select(
+        expressions=[exp.column(name) for name in output_col_names],
+    ).from_(exp.Table(this=exp.to_identifier(ranked_name)))
+    deduped_body.set(
+        "where",
+        exp.Where(
+            this=exp.EQ(
+                this=exp.column(rn_col),
+                expression=exp.Literal.number(1),
+            )
+        ),
+    )
+
+    # Build the new outer SELECT (which carries ORDER BY / LIMIT from
+    # the original — those are presentation concerns that belong with
+    # the final result).
+    new_outer = exp.Select(expressions=[exp.Star()]).from_(
+        exp.Table(this=exp.to_identifier(deduped_name))
+    )
+    original_order = target.args.get("order")
+    if original_order is not None:
+        new_outer.set("order", original_order.copy())
+    original_limit = target.args.get("limit")
+    if original_limit is not None:
+        new_outer.set("limit", original_limit.copy())
+    original_offset = target.args.get("offset")
+    if original_offset is not None:
+        new_outer.set("offset", original_offset.copy())
+
+    # Strip qualifiers in the new outer's ORDER BY since columns
+    # come from the (unaliased) deduped CTE.
+    order = new_outer.args.get("order")
+    if order is not None:
+        for col in order.find_all(exp.Column):
+            col.set("table", None)
+
+    # Compose the WITH chain.
+    new_ctes: List[exp.CTE] = []
+    if original_with is not None:
+        new_ctes.extend(original_with.expressions)
+    new_ctes.append(exp.CTE(
+        this=ranked_body,
+        alias=exp.TableAlias(this=exp.to_identifier(ranked_name)),
+    ))
+    new_ctes.append(exp.CTE(
+        this=deduped_body,
+        alias=exp.TableAlias(this=exp.to_identifier(deduped_name)),
+    ))
+    new_outer.set("with_", exp.With(expressions=new_ctes, recursive=False))
+
+    # Swap the new outer into the parent statement.
+    if isinstance(root, exp.Create):
+        root.set("expression", new_outer)
+        statements[0] = root
+    else:
+        statements[0] = new_outer
+
+    log.distinct_rewritten = True
+
+    try:
+        rendered = "\n".join(
+            s.sql(pretty=True) for s in statements if s is not None
+        )
+        if sql.rstrip().endswith(";") and not rendered.rstrip().endswith(";"):
+            rendered = rendered.rstrip() + ";"
+        return rendered, findings
+    except Exception:  # noqa: BLE001 — fail-soft
+        return sql, findings
+
+
 def lift_subqueries_to_ctes(
     sql: str,
     findings: List[QualityFinding],
@@ -3089,6 +3345,7 @@ class TransformLog:
     joined_cte_extracted: bool = False
     filtered_cte_extracted: bool = False
     union_branches_extracted: bool = False
+    distinct_rewritten: bool = False
     schema_replacements: List[Tuple[str, str]] = field(default_factory=list)
     obsolete_cte_names: List[str] = field(default_factory=list)
     stripped_metadata_columns: List[str] = field(default_factory=list)
@@ -3567,6 +3824,14 @@ def emit_comment_header(
         )
         checklist.append("- [X] UNION branches lifted to CTEs.")
 
+    if log.distinct_rewritten:
+        summary.append(
+            "  - Replaced `SELECT DISTINCT` with explicit "
+            "`ROW_NUMBER() OVER (PARTITION BY <projections>)` + "
+            "`WHERE rn = 1` dedup pattern (`_ranked` + `_deduped` CTEs)."
+        )
+        checklist.append("- [X] DISTINCT replaced by explicit dedup CTEs.")
+
     if log.obsolete_ctes_removed:
         if log.obsolete_cte_names:
             obsolete = ", ".join(f"`{n}`" for n in log.obsolete_cte_names)
@@ -3671,6 +3936,19 @@ def apply_auto_fixes(
         out, findings = lift_subqueries_to_ctes(out, findings)
         if out != before:
             log.subqueries_lifted = True
+
+        # Replace ``SELECT DISTINCT`` with an explicit two-CTE dedup
+        # pattern (``<entity>_ranked`` + ``<entity>_deduped``).
+        # Runs AFTER subquery lifting (so the subquery shapes settle
+        # before we touch DISTINCT) and BEFORE source pushdown so the
+        # downstream layering passes see a deduped CTE as their FROM
+        # rather than a DISTINCT-flagged SELECT.
+        before = out
+        out, findings = replace_distinct_with_rownum(
+            out, findings, entity_hint, log,
+        )
+        if out != before:
+            log.distinct_rewritten = True
 
         # Push single-table projections and filters into per-source CTEs.
         # Runs after the subquery lift so any derived tables that became
@@ -4070,47 +4348,130 @@ def emit_genie_prompt(
         "columns the downstream consumer needs."
     )
 
-    # 7. Modular query design.
+    # 7. Layered CTE structure — the 5-layer model.
     n += 1
     lines.append(
-        f"{n}. **Modular Query Design** — structure the rewrite as "
-        "logical CTEs in three tiers:"
+        f"{n}. **Layered CTE Structure** — every query should fan out "
+        "into single-concern CTEs. Each CTE answers one question:"
     )
     lines.append(
-        "   - **Preparation CTEs** named `<source_table>_filtered` "
-        "(filter + SCD2 predicate per source)."
+        "   - **Source layer** — `<table>_prepared` or "
+        "`<table>_filtered`. Owns bare columns, renames, single-source "
+        "value transforms (UPPER, TRIM, arithmetic), and single-source "
+        "WHERE filters. One CTE per source table referenced."
     )
     lines.append(
-        "   - **Transformation CTEs** named for their purpose "
-        "(`transformed_data`, `combined_data`, `aggregated_data`, "
-        "`ranked_customers`, etc.). Push column derivations to the "
-        "earliest CTE where all required fields are available. "
-        "`GROUP BY` belongs in its own dedicated CTE."
+        "   - **Joined layer** — `<entity>_joined`. Owns JOINs and "
+        "multi-source derivations (column expressions that depend on "
+        "more than one source). NO WHERE clause. NO aggregation."
     )
     lines.append(
-        "   - **Final SELECT** — selects pre-prepared fields only; "
-        "no derivations, no filtering, no joins."
+        "   - **Filtered layer** — `<entity>_filtered`. Owns "
+        "cross-source WHERE predicates (filters whose operands come "
+        "from multiple source CTEs). Emitted ONLY when such "
+        "predicates exist. NO joins, NO derivations, NO aggregation."
+    )
+    lines.append(
+        "   - **Aggregated layer** — `<entity>_aggregated`. Owns "
+        "`GROUP BY`, aggregate functions (`SUM`, `MAX`, `COUNT`, ...), "
+        "and `HAVING`. Reads from the filtered or joined CTE. NO "
+        "JOINs of its own, NO derivations, NO formatting."
+    )
+    lines.append(
+        "   - **Final SELECT** (no CTE — top level). Owns "
+        "`CAST`, `COALESCE`, `NULLIF`, `CASE` with defaults, "
+        "constants/literals, `ORDER BY`, `LIMIT`, and window functions "
+        "(`ROW_NUMBER`, `LAG`, `SUM OVER PARTITION BY`). Reads from "
+        "the aggregated/filtered/joined CTE. NO joins of its own, NO "
+        "WHERE, NO GROUP BY."
     )
 
     # 8. UNION ALL purity + source tagging.
     n += 1
     lines.append(
-        f"{n}. **UNION ALL Purity** — when combining datasets, do "
-        "all transformations in per-source CTEs first. The UNION "
-        "ALL block must only concatenate prepared, schema-aligned "
-        "datasets (no casts, no filters, no expressions inside the "
-        "UNION). Each branch must add a string-literal column "
-        "identifying the originating source "
-        "(e.g., `'A_SOURCE' AS source_ind`)."
+        f"{n}. **UNION ALL Purity** — when combining datasets, lift "
+        "each branch into its own CTE first. The top-level body must "
+        "be a pure `SELECT * FROM <branch_cte_a> UNION ALL SELECT * "
+        "FROM <branch_cte_b> ...` with no casts, no filters, no "
+        "expressions. Each branch must add a string-literal tag "
+        "column identifying the source "
+        "(e.g., `'A_SOURCE' AS source_ind`), and each branch's CTE "
+        "body must itself be fully layered using the rules above."
     )
 
-    # 9. Avoid DISTINCT.
+    # 9. Predicate-subquery → CTE.
     n += 1
     lines.append(
-        f"{n}. **Avoid DISTINCT** — use explicit deduplication via "
-        "`ROW_NUMBER() OVER (PARTITION BY <pk> ORDER BY <tie>)` "
-        "instead of `DISTINCT`. If `DISTINCT` is unavoidable, add a "
-        "comment justifying why."
+        f"{n}. **Predicate Subquery Lift** — `WHERE x IN (SELECT ...)` "
+        "and `WHERE EXISTS (SELECT ...)` must have their inner SELECT "
+        "lifted into a dedicated CTE; the predicate becomes `WHERE x "
+        "IN (SELECT col FROM <cte>)` or `WHERE EXISTS (SELECT 1 FROM "
+        "<cte> WHERE <cte>.x = outer.x)`. For correlated cases, "
+        "promote the correlation column as a projection in the lifted "
+        "CTE; non-correlation predicates stay inside the CTE."
+    )
+
+    # 10. EXCEPT / INTERSECT branch lift.
+    n += 1
+    lines.append(
+        f"{n}. **EXCEPT / INTERSECT Lift** — top-level "
+        "`EXCEPT` / `INTERSECT` operands that aren't already bare "
+        "`SELECT * FROM <cte>` references must be lifted into their "
+        "own CTEs. The resulting body should be a pure "
+        "`SELECT * FROM <a> EXCEPT SELECT * FROM <b>`."
+    )
+
+    # 11. Avoid DISTINCT — explicit ranked + deduped pattern.
+    n += 1
+    lines.append(
+        f"{n}. **Replace DISTINCT with explicit dedup** — `SELECT "
+        "DISTINCT` hides data-quality problems. Rewrite as two CTEs:"
+    )
+    lines.append(
+        "   ```sql"
+    )
+    lines.append(
+        "   WITH <entity>_ranked AS ("
+    )
+    lines.append(
+        "     SELECT <projection_list>,"
+    )
+    lines.append(
+        "            ROW_NUMBER() OVER ("
+    )
+    lines.append(
+        "              PARTITION BY <all projection columns>"
+    )
+    lines.append(
+        "              ORDER BY (SELECT NULL)"
+    )
+    lines.append(
+        "            ) AS rn"
+    )
+    lines.append(
+        "     FROM <original-FROM-WHERE-GROUP-BY>"
+    )
+    lines.append(
+        "   ), <entity>_deduped AS ("
+    )
+    lines.append(
+        "     SELECT <projection_list> FROM <entity>_ranked WHERE rn = 1"
+    )
+    lines.append(
+        "   )"
+    )
+    lines.append(
+        "   SELECT * FROM <entity>_deduped"
+    )
+    lines.append(
+        "   ```"
+    )
+    lines.append(
+        "   The `_ranked` CTE makes the duplication visible and "
+        "inspectable; the `_deduped` CTE is a separate filtering step. "
+        "Use a meaningful ORDER BY in the window when there's a "
+        "deterministic tie-break key (e.g., latest scan_date wins); "
+        "otherwise `(SELECT NULL)` signals an order-independent dedup."
     )
 
     # 10. Table qualifier rewrite.

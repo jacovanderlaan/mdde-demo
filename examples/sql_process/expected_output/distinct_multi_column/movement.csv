@@ -1,0 +1,4 @@
+"target_model_name","target_table_name","target_column_name","source_model_name","source_table_name","source_column_name","derived_indicator","movement_expression","dependency_type","source_version"
+"Converter","distinct_multi_column","customer_id","RAW","customer","customer_id","false","c.customer_id AS customer_id","strict",""
+"Converter","distinct_multi_column","country","RAW","customer","country","false","c.country AS country","strict",""
+"Converter","distinct_multi_column","loan_product","RAW","loans","product_code","false","l.product_code AS loan_product","strict",""
