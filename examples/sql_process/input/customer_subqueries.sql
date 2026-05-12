@@ -7,8 +7,8 @@
 --   1. Derived table in FROM        -> lift (alias 'recent_orders')
 --   2. Derived table in JOIN        -> lift (alias 'order_totals')
 --   3. Scalar subquery in SELECT    -> lift (uncorrelated)
---   4. WHERE IN (SELECT ...)        -> SKIP (predicate -> SUBQUERY_NOT_LIFTED)
---   5. Correlated subquery in SELECT-> SKIP (correlated -> SUBQUERY_NOT_LIFTED)
+--   4. WHERE IN (SELECT ...)        -> lift (inner SELECT goes to a CTE; outer keeps the IN against the CTE)
+--   5. Correlated subquery in SELECT-> SKIP (correlated scalar subquery in projection — still inline)
 
 CREATE OR REPLACE VIEW customer_subqueries AS
 SELECT

@@ -530,32 +530,37 @@ passthrough-CTE rewrite. Layer/concern rule is documented in
 ### Subquery → CTE lifting
 
 Inline subqueries make SQL harder to read and harder to reuse. The
-script lifts the three shapes that are safe under all engine
-behaviours into named CTEs at the top of the query:
+script lifts every safe shape into named CTEs at the top of the
+query:
 
 | Shape | Example | Becomes |
 |---|---|---|
 | Derived table in FROM/JOIN | `FROM (SELECT ...) AS x` | `WITH x AS (SELECT ...) ... FROM x` |
 | Scalar subquery in SELECT | `SELECT (SELECT MAX(t) FROM o) AS m` | `WITH _sub1 AS (SELECT MAX(t) AS value FROM o) ... SELECT (SELECT value FROM _sub1) AS m` |
 | UNION wrapped in FROM | `FROM ((SELECT ...) UNION ALL (SELECT ...))` | `WITH _sub1 AS (... UNION ALL ...) ... FROM _sub1` |
+| WHERE IN (SELECT ...) | `WHERE id IN (SELECT id FROM t)` | `WITH _sub1 AS (SELECT id FROM t) ... WHERE id IN (SELECT id FROM _sub1)` |
+| WHERE EXISTS (SELECT ...) | `WHERE EXISTS (SELECT 1 FROM o WHERE o.cid = c.cid)` | `WITH _sub1 AS (SELECT cid FROM o) ... WHERE EXISTS (SELECT 1 FROM _sub1 WHERE _sub1.cid = c.cid)` |
+| Top-level EXCEPT / INTERSECT | `SELECT ... EXCEPT SELECT ...` | `WITH _sub1 AS (...), _sub2 AS (...) SELECT * FROM _sub1 EXCEPT SELECT * FROM _sub2` |
+
+**Correlated WHERE IN / EXISTS:** the inner SELECT's correlation
+columns get promoted as projections of the lifted CTE; the outer
+predicate re-attaches the correlation as `<cte>.col = <outer>.col`.
+Non-correlated WHERE leaves inside the original subquery stay
+inside the CTE. See `expected_output/predicate_subqueries/optimized.sql`
+for a worked example.
 
 **CTE names** prefer the existing alias when present; otherwise
 generate `_sub1`, `_sub2`, ... — stable and never collide with
 existing CTEs.
 
-**Skipped, with a `SUBQUERY_NOT_LIFTED` info finding:**
+**Still left inline (with a `SUBQUERY_NOT_LIFTED` info finding):**
 
-- **Correlated subqueries** — `SELECT (SELECT COUNT(*) FROM o WHERE
-  o.customer_id = c.customer_id)`. Moving the inner SELECT to a CTE
-  would orphan the outer reference; the correlated form must stay
-  inline.
-- **WHERE IN / EXISTS / comparison subqueries** —
-  `WHERE id IN (SELECT id FROM t)`. These are boolean predicates,
-  not table-like; converting them to a CTE-style join would require
-  synthesising a `DISTINCT` and may change row counts.
-
-The skip-reasons appear in `report.md` under the quality-findings
-table so the user can see what was deliberately left inline.
+- **Correlated scalar subqueries in SELECT** — `SELECT (SELECT
+  COUNT(*) FROM o WHERE o.customer_id = c.customer_id) AS x`. The
+  outer reference would orphan; the correlated form stays inline.
+- **Comparison subqueries** — `WHERE x > (SELECT MAX(y) FROM t)`.
+  Non-IN/EXISTS predicates with multi-row potential are conservative
+  to lift; flagged for human review.
 
 ### Single-table projection pushdown
 

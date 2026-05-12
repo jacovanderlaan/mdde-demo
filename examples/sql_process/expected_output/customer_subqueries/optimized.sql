@@ -7,8 +7,8 @@
 --   1. Derived table in FROM        -> lift (alias 'recent_orders')
 --   2. Derived table in JOIN        -> lift (alias 'order_totals')
 --   3. Scalar subquery in SELECT    -> lift (uncorrelated)
---   4. WHERE IN (SELECT ...)        -> SKIP (predicate -> SUBQUERY_NOT_LIFTED)
---   5. Correlated subquery in SELECT-> SKIP (correlated -> SUBQUERY_NOT_LIFTED)
+--   4. WHERE IN (SELECT ...)        -> lift (inner SELECT goes to a CTE; outer keeps the IN against the CTE)
+--   5. Correlated subquery in SELECT-> SKIP (correlated scalar subquery in projection — still inline)
 
 /*
 Migration Details:
@@ -25,7 +25,7 @@ Validation Checklist:
 - [X] JOIN isolated into joined CTE.
 */
 
-/* @mdde-entity: customer_subqueries */ /* @mdde-layer: business */ /* @mdde-stereotype: fact */ /* @mdde-description: Subquery shapes that should be lifted to CTEs (plus two that should be left inline) */ /* Planted shapes: */ /*   1. Derived table in FROM        -> lift (alias 'recent_orders') */ /*   2. Derived table in JOIN        -> lift (alias 'order_totals') */ /*   3. Scalar subquery in SELECT    -> lift (uncorrelated) */ /*   4. WHERE IN (SELECT ...)        -> SKIP (predicate -> SUBQUERY_NOT_LIFTED) */ /*   5. Correlated subquery in SELECT-> SKIP (correlated -> SUBQUERY_NOT_LIFTED) */
+/* @mdde-entity: customer_subqueries */ /* @mdde-layer: business */ /* @mdde-stereotype: fact */ /* @mdde-description: Subquery shapes that should be lifted to CTEs (plus two that should be left inline) */ /* Planted shapes: */ /*   1. Derived table in FROM        -> lift (alias 'recent_orders') */ /*   2. Derived table in JOIN        -> lift (alias 'order_totals') */ /*   3. Scalar subquery in SELECT    -> lift (uncorrelated) */ /*   4. WHERE IN (SELECT ...)        -> lift (inner SELECT goes to a CTE; outer keeps the IN against the CTE) */ /*   5. Correlated subquery in SELECT-> SKIP (correlated scalar subquery in projection — still inline) */
 CREATE OR REPLACE VIEW customer_subqueries AS
 WITH stg_customers_prepared AS (
   SELECT
@@ -53,6 +53,12 @@ WITH stg_customers_prepared AS (
   FROM raw_orders
   GROUP BY
     customer_id
+), _sub2 AS (
+  SELECT
+    customer_id
+  FROM raw_orders
+  WHERE
+    order_status = 'SHIPPED'
 ), customer_subqueries_joined AS (
   SELECT
     customer_id,
@@ -70,9 +76,7 @@ WITH stg_customers_prepared AS (
     c.customer_id IN (
       SELECT
         customer_id
-      FROM raw_orders
-      WHERE
-        order_status = 'SHIPPED'
+      FROM _sub2
     )
 )
 SELECT

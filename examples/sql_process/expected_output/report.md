@@ -1,6 +1,6 @@
 # sql_process — run report
 
-Files processed: **11**
+Files processed: **13**
 
 ## Files
 
@@ -11,8 +11,10 @@ Files processed: **11**
 | `customer_revenue.sql` | customer_revenue_clean | business | yes | 2 | 2 | 7 | 6 |
 | `customer_revenue_bad.sql` | customer_revenue | business | yes | 2 | 2 | 10 | 12 |
 | `customer_segment_analytics.sql` | customer_segment_analytics | business | yes | 3 | 2 | 10 | 10 |
-| `customer_subqueries.sql` | customer_subqueries | business | yes | 0 | 2 | 7 | 13 |
+| `customer_subqueries.sql` | customer_subqueries | business | yes | 0 | 2 | 7 | 12 |
+| `except_subscribed_customers.sql` | except_subscribed_customers | business | yes | 0 | 2 | 2 | 2 |
 | `passthrough_with_loans.sql` | passthrough_with_loans | business | yes | 2 | 2 | 6 | 6 |
+| `predicate_subqueries.sql` | predicate_subqueries | business | yes | 0 | 3 | 3 | 3 |
 | `raw_customers.sql` | raw_customers | source | yes | 0 | 1 | 7 | 5 |
 | `raw_orders.sql` | raw_orders | source | yes | 0 | 1 | 7 | 4 |
 | `stg_customers.sql` | stg_customers | staging | yes | 0 | 1 | 7 | 5 |
@@ -20,7 +22,7 @@ Files processed: **11**
 
 ## Quality findings
 
-**Total:** 72 (error=3, warning=15, info=54)  
+**Total:** 76 (error=3, warning=15, info=58)  
 **Auto-fixed:** 1
 
 | File | Location | Rule | Severity | Auto-fixed | Message |
@@ -72,14 +74,18 @@ Files processed: **11**
 | `customer_subqueries.sql` | <file> | COMBINED_SOURCE_FILTERS | info | no | WHERE clause references columns from 2 sources (c, o) |
 | `customer_subqueries.sql` | <file> | PK_DEDUP_CHECK_MISSING | info | no | @pk annotations present but no ROW_NUMBER PARTITION BY <pk> for dedup verific... |
 | `customer_subqueries.sql` | <file> | MISSING_SOURCE_VERSION | info | no | Filename 'customer_subqueries.sql' has fewer than 3 hyphen-separated parts; m... |
-| `customer_subqueries.sql` | <predicate> | SUBQUERY_NOT_LIFTED | info | no | Subquery inside In left inline — lifting an IN/EXISTS/comparison subquery wou... |
-| `customer_subqueries.sql` | <correlated> | SUBQUERY_NOT_LIFTED | info | no | Correlated subquery left inline — references an outer scope that a CTE cannot... |
+| `customer_subqueries.sql` | <correlated> | SUBQUERY_NOT_LIFTED | info | no | Correlated subquery in FROM/SELECT position left inline — lifting would orpha... |
+| `except_subscribed_customers.sql` | <file> | DERIVATION_IN_WHERE | info | no | IS [NOT] NULL on raw column 'email' inside WHERE |
+| `except_subscribed_customers.sql` | <file> | MISSING_SOURCE_VERSION | info | no | Filename 'except_subscribed_customers.sql' has fewer than 3 hyphen-separated ... |
 | `passthrough_with_loans.sql` | <file> | SELECT_STAR | warning | no | SELECT * detected - explicit column list recommended |
 | `passthrough_with_loans.sql` | <file> | SELECT_STAR | warning | no | SELECT * detected - explicit column list recommended |
 | `passthrough_with_loans.sql` | <file> | MISSING_ALIAS | info | no | Table 'customer' has no alias in multi-table query |
 | `passthrough_with_loans.sql` | <file> | MISSING_ALIAS | info | no | Table 'loans' has no alias in multi-table query |
 | `passthrough_with_loans.sql` | <file> | DERIVATION_IN_WHERE | info | no | IS [NOT] NULL on raw column 'email' inside WHERE |
 | `passthrough_with_loans.sql` | <file> | MISSING_SOURCE_VERSION | info | no | Filename 'passthrough_with_loans.sql' has fewer than 3 hyphen-separated parts... |
+| `predicate_subqueries.sql` | <file> | COMBINED_SOURCE_FILTERS | info | no | WHERE clause references columns from 3 sources (c, l, o) |
+| `predicate_subqueries.sql` | <file> | COMBINED_SOURCE_FILTERS | info | no | WHERE clause references columns from 2 sources (c, l) |
+| `predicate_subqueries.sql` | <file> | MISSING_SOURCE_VERSION | info | no | Filename 'predicate_subqueries.sql' has fewer than 3 hyphen-separated parts; ... |
 | `raw_customers.sql` | <file> | MISSING_ALIAS | info | no | Table 'raw_customers' has no alias in multi-table query |
 | `raw_customers.sql` | <file> | MISSING_ALIAS | info | no | Table 'crm_customers_export' has no alias in multi-table query |
 | `raw_customers.sql` | <file> | DERIVATION_IN_WHERE | info | no | IS [NOT] NULL on raw column '_ingested_at' inside WHERE |
@@ -100,7 +106,7 @@ Files processed: **11**
 
 ## Mapping coverage
 
-**76/79** output columns have a resolved source attribute (96%)
+**81/84** output columns have a resolved source attribute (96%)
 
 ## Cross-file lineage
 
@@ -136,7 +142,9 @@ flowchart LR
     customer_revenue["customer_revenue<br/><i>customer_revenue_bad.sql</i>"]
     customer_segment_analytics["customer_segment_analytics<br/><i>customer_segment_analytics.sql</i>"]
     customer_subqueries["customer_subqueries<br/><i>customer_subqueries.sql</i>"]
+    except_subscribed_customers["except_subscribed_customers<br/><i>except_subscribed_customers.sql</i>"]
     passthrough_with_loans["passthrough_with_loans<br/><i>passthrough_with_loans.sql</i>"]
+    predicate_subqueries["predicate_subqueries<br/><i>predicate_subqueries.sql</i>"]
     union_revenue_breakdown["union_revenue_breakdown<br/><i>union_revenue_breakdown.sql</i>"]
   end
   raw_customers --> stg_customers
@@ -160,9 +168,14 @@ flowchart LR
   ext_landing_crm_customers_export --> raw_customers
   ext_landing_oms_orders_export --> raw_orders
   ext_raw_customer --> agg_customer_summary
+  ext_raw_customer --> except_subscribed_customers
   ext_raw_customer --> passthrough_with_loans
+  ext_raw_customer --> predicate_subqueries
   ext_raw_loans --> passthrough_with_loans
+  ext_raw_loans --> predicate_subqueries
   ext_raw_orders --> agg_customer_summary
+  ext_raw_orders --> except_subscribed_customers
+  ext_raw_orders --> predicate_subqueries
   ext_raw_orders --> union_revenue_breakdown
 ```
 
@@ -176,7 +189,9 @@ flowchart LR
 | `customer_revenue_bad.sql` | customer_revenue | 1 | pk |
 | `customer_segment_analytics.sql` | customer_segment_analytics | 1 | derived |
 | `customer_subqueries.sql` | customer_subqueries | 0 | — |
+| `except_subscribed_customers.sql` | except_subscribed_customers | 0 | — |
 | `passthrough_with_loans.sql` | passthrough_with_loans | 0 | — |
+| `predicate_subqueries.sql` | predicate_subqueries | 0 | — |
 | `raw_customers.sql` | raw_customers | 5 | business_key, nullable, pii, pk |
 | `raw_orders.sql` | raw_orders | 2 | business_key, fk, pk |
 | `stg_customers.sql` | stg_customers | 3 | business_key, pii, pk |

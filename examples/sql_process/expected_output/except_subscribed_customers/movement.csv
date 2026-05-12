@@ -1,0 +1,4 @@
+"target_model_name","target_table_name","target_column_name","source_model_name","source_table_name","source_column_name","derived_indicator","movement_expression","dependency_type","source_version"
+"Converter","except_subscribed_customers","customer_id","RAW","customer","customer_id","false","c.customer_id AS customer_id","strict",""
+"Converter","except_subscribed_customers","email","RAW","customer","email","false","c.email AS email","strict",""
+"Converter","except_subscribed_customers","","RAW","orders","","false","","strict",""

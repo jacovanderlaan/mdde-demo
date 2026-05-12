@@ -120,6 +120,47 @@ the source layer and inspired the rest of the pattern.
 - **Reflected in code at:** `lift_subqueries_to_ctes()` `non_candidates`
   loop and the correlated/predicate-detection branches.
 
+### D3b. WHERE IN / WHERE EXISTS / EXCEPT lifting (2026-05-12)
+
+- **Question:** can we extend subquery → CTE lifting to handle
+  `WHERE IN (SELECT …)`, `WHERE EXISTS (SELECT …)`, and top-level
+  `EXCEPT` / `INTERSECT`? Including correlated cases?
+- **Decision:** yes, with a structural rewrite that preserves the
+  predicate shape:
+  - **WHERE IN (SELECT …)** — lift the inner SELECT's data-access
+    logic into a CTE. Outer predicate stays as `IN (SELECT <col>
+    FROM <cte>)`.
+  - **WHERE EXISTS (SELECT …)** — lift the inner SELECT. Outer
+    becomes `EXISTS (SELECT 1 FROM <cte>)`.
+  - **EXCEPT / INTERSECT** at the top level — both branches
+    lifted; top-level body becomes `SELECT * FROM cte_a EXCEPT
+    SELECT * FROM cte_b`.
+- **Correlated handling:** for each `<inner>.x = <outer>.x` equality
+  in the inner SELECT's WHERE, **split** the leaf:
+  1. Promote `<inner>.x` to a projection in the lifted CTE.
+  2. Drop the leaf from the inner WHERE.
+  3. Re-apply the correlation in the outer predicate as
+     `<cte>.x = <outer>.x`.
+  Non-correlated WHERE leaves (`<inner>.status = 'OPEN'`) stay
+  inside the CTE. Pure-correlation leaves
+  (`<outer>.x IS NOT NULL` referencing only outer-scope columns)
+  bubble up to the outer predicate verbatim. Anything more complex
+  than a simple equality (function on either side, IN, …)
+  conservatively stays inside the CTE.
+- **Why it matters:** the customer's SSF SQL chains nested
+  predicate subqueries multiple levels deep; lifting them puts the
+  data-access logic in named CTEs that show up in lineage graphs,
+  while the predicate itself stays semantically identical (no
+  invented JOINs that could change row counts).
+- **Rejected alternatives:**
+  - "Full decorrelation to JOIN" — would change row counts when
+    the inner produces duplicates; needs a synthesised DISTINCT
+    that's risky in production data.
+  - "Lift wholesale; leave correlation orphaned" — produces invalid
+    SQL.
+- **Reflected in code at:** `lift_subqueries_to_ctes()` predicate-
+  subqueries loop + `_correlated_columns()` + `_outer_alias_for()`.
+
 ---
 
 ## Single-table projection pushdown

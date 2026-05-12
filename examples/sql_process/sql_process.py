@@ -711,12 +711,23 @@ _AUTOFIX_LEADING_WHERE_TRUE = re.compile(
 #   - Derived tables in FROM/JOIN: `FROM (SELECT ...) AS x`
 #   - Scalar subqueries in SELECT projections: `SELECT (SELECT ...) AS y`
 #   - FROM-wrapped set operations: `FROM ((SELECT ...) UNION ALL (SELECT ...))`
+#   - WHERE IN (SELECT ...) predicates — including correlated.
+#   - WHERE EXISTS (SELECT ...) predicates — including correlated.
+#   - Top-level EXCEPT / EXCEPT ALL / INTERSECT — both branches lifted.
 #
-# Out-of-scope (would change semantics — left inline, flagged in the report):
-#   - Correlated subqueries (any column reference into an outer scope)
-#   - WHERE IN (SELECT ...) / WHERE EXISTS (SELECT ...) — boolean predicates,
-#     not table-like; a CTE rewrite needs a join + DISTINCT that we can't
-#     synthesise safely.
+# Correlated handling (2026-05-12):
+#   When the inner SELECT references an outer-scope column, the lifted
+#   CTE additionally projects the correlation column(s) so the outer
+#   predicate can re-correlate via a join-shaped reference into the
+#   CTE. The outer predicate's structure is preserved (IN / EXISTS
+#   remain as predicates) — only the inner SELECT's source-table
+#   logic is moved into the CTE.
+#
+# Out-of-scope (still left inline, flagged):
+#   - Comparison subqueries (`WHERE x = (SELECT MAX(y) FROM t)`) when
+#     non-scalar — these are scalar already handled by the SELECT-
+#     projection path when promoted; a WHERE-side scalar with multi-
+#     row potential is too risky.
 
 
 def _is_correlated(subq: exp.Expression, outer_scopes: List[exp.Expression]) -> bool:
@@ -724,6 +735,15 @@ def _is_correlated(subq: exp.Expression, outer_scopes: List[exp.Expression]) -> 
     inside itself. Compute the set of tables/aliases reachable from
     within the subquery, then check every Column for a table qualifier
     pointing outside that set.
+    """
+    return bool(_correlated_columns(subq))
+
+
+def _correlated_columns(subq: exp.Expression) -> List[exp.Column]:
+    """Return every column in ``subq`` whose qualifier is not defined
+    by a table / CTE inside ``subq``. Those are outer-scope references —
+    the columns we need to lift OUT of the inner SELECT (or expose as a
+    projection in the rewritten CTE so the outer can re-correlate).
     """
     inner_names: Set[str] = set()
     for tbl in subq.find_all(exp.Table):
@@ -733,11 +753,33 @@ def _is_correlated(subq: exp.Expression, outer_scopes: List[exp.Expression]) -> 
             inner_names.add(tbl.name)
     for cte in subq.find_all(exp.CTE):
         inner_names.add(cte.alias_or_name)
-
+    out: List[exp.Column] = []
     for col in subq.find_all(exp.Column):
         if col.table and col.table not in inner_names:
-            return True
-    return False
+            out.append(col)
+    return out
+
+
+def _outer_alias_for(col: exp.Column, target: exp.Expression) -> Optional[str]:
+    """Look up which outer-scope source alias ``col.table`` belongs to.
+    Returns the alias unchanged when it matches a real source in the
+    outer SELECT's FROM/JOIN tree; otherwise ``None``. Used to validate
+    that a correlation reference is meaningful (not a typo)."""
+    if not col.table:
+        return None
+    if not isinstance(target, exp.Select):
+        return col.table  # Be permissive.
+    from_clause = target.args.get("from_") or target.args.get("from")
+    if from_clause is None:
+        return None
+    for tbl in from_clause.find_all(exp.Table):
+        if (tbl.alias or tbl.name) == col.table:
+            return col.table
+    for join in target.args.get("joins") or []:
+        for tbl in join.find_all(exp.Table):
+            if (tbl.alias or tbl.name) == col.table:
+                return col.table
+    return None
 
 
 def _subquery_in_predicate(subq: exp.Subquery) -> bool:
@@ -811,7 +853,9 @@ def lift_subqueries_to_ctes(
     else:
         target = root.find(exp.Select)
 
-    if target is None or not isinstance(target, (exp.Select, exp.Union)):
+    if target is None or not isinstance(
+        target, (exp.Select, exp.Union, exp.Except, exp.Intersect)
+    ):
         return sql, findings
 
     # Existing CTE names — start the used-name set with these so we
@@ -827,13 +871,18 @@ def lift_subqueries_to_ctes(
     fallback_idx = 1
     rewrote_any = False
 
-    # Collect candidates first to avoid mutating during traversal. We
-    # only lift subqueries whose direct parent is a From/Join (derived
-    # table) or a Select projection (scalar subquery). Subqueries we
-    # see but don't pick up here (typically inside IN/EXISTS/predicates)
-    # get a SUBQUERY_NOT_LIFTED finding so the user knows the rewrite
-    # was intentional, not missed.
+    # Collect candidates. Three categories:
+    #   1. Derived tables in FROM/JOIN, scalar subqueries in SELECT —
+    #      lift the inner SELECT into a CTE; replace the subquery
+    #      with a reference to that CTE.
+    #   2. IN / EXISTS predicate subqueries — lift the inner SELECT's
+    #      data-access logic into a CTE; rewrite the predicate so it
+    #      references the CTE. For correlated cases the CTE
+    #      additionally projects the correlation column(s).
+    #   3. Other predicate-side subqueries (comparison subqueries with
+    #      non-scalar potential) — flagged, left inline.
     candidates: List[exp.Subquery] = []
+    predicate_subqueries: List[exp.Expression] = []  # In / Exists nodes
     non_candidates: List[exp.Subquery] = []
     for sub in target.find_all(exp.Subquery):
         parent = sub.parent
@@ -851,9 +900,17 @@ def lift_subqueries_to_ctes(
         if isinstance(parent, exp.Alias) and isinstance(parent.parent, exp.Select):
             candidates.append(sub)
             continue
-        # Everything else (In, Exists, comparisons, etc.) — flag and
-        # leave inline.
+        # WHERE IN (SELECT ...) — sub.parent is an In node.
+        if isinstance(parent, exp.In) and parent.args.get("query") is sub:
+            predicate_subqueries.append(parent)
+            continue
+        # Comparison subqueries — non-scalar potential; leave inline.
         non_candidates.append(sub)
+    # Also collect WHERE EXISTS (SELECT ...) — these wrap a Select
+    # directly (no Subquery node), so they don't show up in the
+    # find_all(exp.Subquery) loop.
+    for exists_node in target.find_all(exp.Exists):
+        predicate_subqueries.append(exists_node)
 
     for sub in non_candidates:
         findings.append(QualityFinding(
@@ -862,36 +919,26 @@ def lift_subqueries_to_ctes(
             location="<predicate>",
             message=(
                 f"Subquery inside {type(sub.parent).__name__} left inline — "
-                "lifting an IN/EXISTS/comparison subquery would require "
+                "non-IN/EXISTS predicate subquery; lifting would require "
                 "synthesising a join/DISTINCT and may change row counts."
             ),
         ))
 
     for sub in candidates:
-        # Skip predicates (IN / EXISTS in WHERE/HAVING/ON).
+        # Predicate slots are handled separately below — skip here.
         if _subquery_in_predicate(sub):
-            findings.append(QualityFinding(
-                rule="SUBQUERY_NOT_LIFTED",
-                severity="info",
-                location="<predicate>",
-                message=(
-                    "Subquery inside WHERE/HAVING/ON predicate left inline — "
-                    "lifting would require synthesising a join/DISTINCT and "
-                    "may change row counts."
-                ),
-            ))
             continue
 
-        # Skip correlated subqueries — moving them into a CTE changes
-        # semantics because the outer reference would no longer resolve.
+        # Skip correlated subqueries in FROM/JOIN/SELECT positions —
+        # moving them into a CTE changes semantics.
         if _is_correlated(sub, []):
             findings.append(QualityFinding(
                 rule="SUBQUERY_NOT_LIFTED",
                 severity="info",
                 location="<correlated>",
                 message=(
-                    "Correlated subquery left inline — references an outer "
-                    "scope that a CTE cannot see."
+                    "Correlated subquery in FROM/SELECT position left inline — "
+                    "lifting would orphan the outer-scope reference."
                 ),
             ))
             continue
@@ -968,6 +1015,260 @@ def lift_subqueries_to_ctes(
             ).from_(exp.Table(this=exp.to_identifier(cte_name)))
             sub.set("this", new_inner)
 
+        rewrote_any = True
+
+    # Predicate subqueries (WHERE IN (SELECT ...) and EXISTS (SELECT ...)).
+    # We lift the inner SELECT's source-table logic into a CTE; the
+    # predicate stays at the outer SELECT but its body becomes a
+    # reference to the CTE. For correlated cases the CTE additionally
+    # projects the correlation columns so the predicate's body can
+    # WHERE on them.
+    for pred_node in predicate_subqueries:
+        if isinstance(pred_node, exp.In):
+            sub = pred_node.args.get("query")
+            if not isinstance(sub, exp.Subquery):
+                continue
+            inner = sub.this
+        elif isinstance(pred_node, exp.Exists):
+            inner = pred_node.this
+            sub = None  # No wrapping Subquery node for Exists.
+        else:
+            continue
+        if not isinstance(inner, exp.Select):
+            continue
+
+        # Build the CTE body: a copy of the inner SELECT. We rewrite
+        # the inner WHERE to remove correlation leaves and lift each
+        # correlation-equality (``l.x = c.x``) to the outer predicate.
+        cte_select = inner.copy()
+
+        cte_inner_names: Set[str] = set()
+        for tbl in cte_select.find_all(exp.Table):
+            if tbl.alias:
+                cte_inner_names.add(tbl.alias)
+            if tbl.name:
+                cte_inner_names.add(tbl.name)
+
+        # Walk the inner WHERE's AND leaves; classify each as
+        #   - inner-only        → stays in CTE WHERE
+        #   - correlation-only  → moves to outer predicate
+        #   - mixed equality    → split: inner side promoted as a CTE
+        #                         projection; outer predicate gets an
+        #                         equality referencing the CTE.
+        outer_correlation_predicates: List[exp.Expression] = []
+        # Maps inner column name → expression to put on the outer side
+        # of the recovered correlation predicate.
+        correlation_pairs: List[Tuple[str, exp.Expression]] = []
+        cte_where = cte_select.args.get("where")
+        remaining: List[exp.Expression] = []
+        if cte_where is not None:
+            for leaf in _split_and(cte_where.this):
+                inner_refs: List[exp.Column] = []
+                outer_refs: List[exp.Column] = []
+                for col in leaf.find_all(exp.Column):
+                    if col.table and col.table not in cte_inner_names:
+                        outer_refs.append(col)
+                    else:
+                        inner_refs.append(col)
+                if not outer_refs:
+                    # Pure inner predicate — stays inside the CTE.
+                    remaining.append(leaf)
+                    continue
+                if not inner_refs:
+                    # Pure correlation — bubble to outer predicate.
+                    outer_correlation_predicates.append(leaf)
+                    continue
+                # Mixed: try to split a simple equality between one
+                # inner column and one outer column. If the shape
+                # isn't an EQ of two columns, fall back to leaving
+                # the leaf inside the CTE (conservative).
+                if (
+                    isinstance(leaf, exp.EQ)
+                    and isinstance(leaf.this, exp.Column)
+                    and isinstance(leaf.expression, exp.Column)
+                ):
+                    lhs_inner = (
+                        not leaf.this.table or leaf.this.table in cte_inner_names
+                    )
+                    rhs_inner = (
+                        not leaf.expression.table
+                        or leaf.expression.table in cte_inner_names
+                    )
+                    if lhs_inner and not rhs_inner:
+                        inner_col, outer_col = leaf.this, leaf.expression
+                    elif rhs_inner and not lhs_inner:
+                        inner_col, outer_col = leaf.expression, leaf.this
+                    else:
+                        remaining.append(leaf)
+                        continue
+                    correlation_pairs.append((inner_col.name, outer_col.copy()))
+                    continue
+                # Anything more complex (function on either side,
+                # arithmetic, IN, …) — conservatively keep inside.
+                remaining.append(leaf)
+            new_inner_pred = _rebuild_and(remaining)
+            if new_inner_pred is None:
+                cte_select.set("where", None)
+            else:
+                cte_where.set("this", new_inner_pred)
+
+        # Promote correlation columns + the inner side of mixed
+        # equalities as projections in the CTE.
+        existing_proj_names: Set[str] = set()
+        bare_projections: List[exp.Expression] = []
+        for proj in cte_select.expressions or []:
+            if isinstance(proj, exp.Alias):
+                existing_proj_names.add(proj.alias)
+            elif isinstance(proj, exp.Column):
+                existing_proj_names.add(proj.name)
+        promoted_proj_names: Set[str] = set()
+        for inner_name, _ in correlation_pairs:
+            if inner_name in existing_proj_names or inner_name in promoted_proj_names:
+                continue
+            bare_projections.append(exp.column(inner_name))
+            promoted_proj_names.add(inner_name)
+        # Also promote columns referenced by pure-correlation predicates
+        # that point at inner-side columns (rare but possible when the
+        # inner-side column is what gets compared to a literal).
+        for leaf in outer_correlation_predicates:
+            for col in leaf.find_all(exp.Column):
+                if col.table and col.table in cte_inner_names:
+                    if col.name not in existing_proj_names and col.name not in promoted_proj_names:
+                        bare_projections.append(exp.column(col.name))
+                        promoted_proj_names.add(col.name)
+
+        # Decide what the CTE's projection list will be.
+        # - For IN: keep the original single-column projection, then
+        #   add the promoted correlation columns.
+        # - For EXISTS: the inner's projection (often `SELECT 1`) is
+        #   semantically useless; replace it with the promoted
+        #   correlation columns. If there are none (uncorrelated
+        #   EXISTS), keep a placeholder ``1`` so the CTE is valid.
+        if isinstance(pred_node, exp.In):
+            # Compose: existing projections + promoted columns.
+            new_projs: List[exp.Expression] = []
+            for proj in cte_select.expressions or []:
+                new_projs.append(proj)
+            for p in bare_projections:
+                new_projs.append(p)
+            cte_select.set("expressions", new_projs)
+        else:  # Exists
+            if bare_projections:
+                cte_select.set("expressions", list(bare_projections))
+            elif not cte_select.expressions:
+                cte_select.set("expressions", [exp.Literal.number(1)])
+            # else: keep whatever the inner had.
+
+        # Pick a CTE name. For predicate-subquery lifts we always need
+        # a fresh fallback name (no useful alias from the parent).
+        cte_name = _make_cte_name(
+            sub if sub is not None else exp.Subquery(this=cte_select),
+            fallback_idx, used_names,
+        )
+        fallback_idx += 1
+        new_ctes.append(exp.CTE(
+            this=cte_select,
+            alias=exp.TableAlias(this=exp.to_identifier(cte_name)),
+        ))
+
+        # Build the outer correlation predicate (re-attached to the
+        # IN/EXISTS body so the correlation still holds, but now
+        # referencing the lifted CTE's columns instead of the inner
+        # table's).
+        rebuilt_predicates: List[exp.Expression] = []
+        # 1. Mixed equalities lifted from inside the CTE.
+        for inner_name, outer_expr in correlation_pairs:
+            rebuilt_predicates.append(
+                exp.EQ(
+                    this=exp.column(inner_name, table=cte_name),
+                    expression=outer_expr,
+                )
+            )
+        # 2. Pure correlation leaves bubbled up wholesale. Inner-side
+        # columns get rewritten to point at the CTE; outer-side
+        # references stay as-is.
+        for leaf in outer_correlation_predicates:
+            leaf_copy = leaf.copy()
+            for col in leaf_copy.find_all(exp.Column):
+                if col.table and col.table in cte_inner_names:
+                    col.set("table", exp.to_identifier(cte_name))
+            rebuilt_predicates.append(leaf_copy)
+        outer_pred = _rebuild_and(rebuilt_predicates) if rebuilt_predicates else None
+
+        # Rewrite the predicate body.
+        if isinstance(pred_node, exp.In):
+            # What single column did the inner SELECT project? sqlglot's
+            # IN expects the inner to project exactly one column.
+            inner_proj = inner.expressions[0] if inner.expressions else None
+            select_col_name: Optional[str] = None
+            if isinstance(inner_proj, exp.Alias):
+                select_col_name = inner_proj.alias
+            elif isinstance(inner_proj, exp.Column):
+                select_col_name = inner_proj.name
+            if select_col_name is None:
+                # Couldn't safely rewrite — flag and skip.
+                findings.append(QualityFinding(
+                    rule="SUBQUERY_NOT_LIFTED",
+                    severity="info",
+                    location="<in>",
+                    message=(
+                        "WHERE IN subquery left inline — inner projection "
+                        "shape was not a single named column."
+                    ),
+                ))
+                continue
+            new_in_body = exp.Select(
+                expressions=[exp.column(select_col_name)],
+            ).from_(exp.Table(this=exp.to_identifier(cte_name)))
+            if outer_pred is not None:
+                new_in_body.set("where", exp.Where(this=outer_pred))
+            sub.set("this", new_in_body)
+        else:  # Exists
+            new_exists_body = exp.Select(
+                expressions=[exp.Literal.number(1)],
+            ).from_(exp.Table(this=exp.to_identifier(cte_name)))
+            if outer_pred is not None:
+                new_exists_body.set("where", exp.Where(this=outer_pred))
+            pred_node.set("this", new_exists_body)
+
+        rewrote_any = True
+
+    # EXCEPT (or INTERSECT) at the top level — lift each branch into
+    # its own CTE so the body becomes ``SELECT * FROM a EXCEPT
+    # SELECT * FROM b``. Operates on top-level Except/Intersect only
+    # (a nested EXCEPT inside another query is left alone).
+    if isinstance(target, (exp.Except, exp.Intersect)) and (
+        isinstance(target.this, exp.Select)
+        and isinstance(target.expression, exp.Select)
+    ):
+        a_name = _make_cte_name(
+            exp.Subquery(this=target.this), fallback_idx, used_names,
+        )
+        fallback_idx += 1
+        b_name = _make_cte_name(
+            exp.Subquery(this=target.expression), fallback_idx, used_names,
+        )
+        fallback_idx += 1
+        new_ctes.append(exp.CTE(
+            this=target.this.copy(),
+            alias=exp.TableAlias(this=exp.to_identifier(a_name)),
+        ))
+        new_ctes.append(exp.CTE(
+            this=target.expression.copy(),
+            alias=exp.TableAlias(this=exp.to_identifier(b_name)),
+        ))
+        target.set(
+            "this",
+            exp.Select(expressions=[exp.Star()]).from_(
+                exp.Table(this=exp.to_identifier(a_name))
+            ),
+        )
+        target.set(
+            "expression",
+            exp.Select(expressions=[exp.Star()]).from_(
+                exp.Table(this=exp.to_identifier(b_name))
+            ),
+        )
         rewrote_any = True
 
     if not rewrote_any:
