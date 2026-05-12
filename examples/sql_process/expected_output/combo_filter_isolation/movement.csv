@@ -1,0 +1,8 @@
+"target_model_name","target_table_name","target_column_name","source_model_name","source_table_name","source_column_name","derived_indicator","movement_expression","dependency_type","source_version"
+"Converter","combo_filter_isolation","customer_id","RAW","customer","customer_id","false","c.customer_id AS customer_id","strict",""
+"Converter","combo_filter_isolation","country","RAW","customer","country","false","c.country AS country","strict",""
+"Converter","combo_filter_isolation","email","RAW","customer","email","false","c.email AS email","strict",""
+"Converter","combo_filter_isolation","amount","RAW","orders","amount","false","o.amount AS amount","strict",""
+"Converter","combo_filter_isolation","order_date","RAW","orders","order_date","false","o.order_date AS order_date","strict",""
+"Converter","combo_filter_isolation","loan_principal","RAW","loans","principal_amount","false","l.principal_amount AS loan_principal","strict",""
+"Converter","combo_filter_isolation","loan_status","RAW","loans","status","false","l.status AS loan_status","strict",""

@@ -912,6 +912,22 @@ def lift_subqueries_to_ctes(
     for exists_node in target.find_all(exp.Exists):
         predicate_subqueries.append(exists_node)
 
+    # Sort predicate subqueries by depth (deepest first) so that
+    # NESTED ones get lifted before their containers. Without this,
+    # an outer ``IN (SELECT ... WHERE col IN (SELECT ...))`` would
+    # have the inner IN lifted to its own CTE, but the outer body
+    # already captured the inline inner before the inner-to-CTE
+    # swap happened — leaving the outer CTE body with the original
+    # inline subquery instead of a reference to the inner CTE.
+    def _node_depth(n: exp.Expression) -> int:
+        d = 0
+        cur = n.parent
+        while cur is not None:
+            d += 1
+            cur = cur.parent
+        return d
+    predicate_subqueries.sort(key=_node_depth, reverse=True)
+
     for sub in non_candidates:
         findings.append(QualityFinding(
             rule="SUBQUERY_NOT_LIFTED",
@@ -3294,10 +3310,17 @@ def apply_table_qualifier(
         )
         for tbl in stmt.find_all(exp.Table):
             name = tbl.name
-            if not name or name in local_ctes:
+            if not name:
                 continue
             db = tbl.args.get("db")
             catalog = tbl.args.get("catalog")
+            # CTE references have no qualifier (they're local names).
+            # Skip ONLY the unqualified ones whose name matches a CTE.
+            # A qualified reference like ``raw.loans`` is a base-table
+            # reference even when ``loans`` happens to also be a CTE
+            # name elsewhere — it must get rewritten.
+            if name in local_ctes and db is None and catalog is None:
+                continue
             # Only rewrite when there's an existing qualifier to replace.
             if db is None and catalog is None:
                 continue

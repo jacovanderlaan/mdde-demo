@@ -1,0 +1,4 @@
+"target_model_name","target_table_name","target_column_name","source_model_name","source_table_name","source_column_name","derived_indicator","movement_expression","dependency_type","source_version"
+"Converter","union_branch_with_user_cte","customer_id","RAW","orders","customer_id","false","orders.customer_id AS customer_id","strict",""
+"Converter","union_branch_with_user_cte","amount","RAW","orders","amount","false","orders.amount AS amount","strict",""
+"Converter","union_branch_with_user_cte","channel","SSF","","","true","'web' AS channel","strict",""

@@ -1,6 +1,6 @@
 # sql_process — run report
 
-Files processed: **23**
+Files processed: **32**
 
 ## Files
 
@@ -8,6 +8,13 @@ Files processed: **23**
 |---|---|---|---|---|---|---|---|
 | `agg_customer_summary.sql` | agg_customer_summary | business | yes | 0 | 2 | 8 | 2 |
 | `chained_cte_pipeline.sql` | chained_cte_pipeline | business | yes | 4 | 2 | 7 | 7 |
+| `combo_at_risk_customers.sql` | combo_at_risk_customers | business | yes | 0 | 3 | 6 | 9 |
+| `combo_casting_at_final_only.sql` | combo_casting_at_final_only | business | yes | 0 | 2 | 12 | 4 |
+| `combo_comma_union_with_subqueries.sql` | combo_comma_union_with_subqueries | business | yes | 0 | 2 | 5 | 11 |
+| `combo_filter_isolation.sql` | combo_filter_isolation | business | yes | 0 | 3 | 7 | 3 |
+| `combo_nested_predicate_subqueries.sql` | combo_nested_predicate_subqueries | business | yes | 0 | 3 | 3 | 8 |
+| `combo_ssf_loan_aggregates.sql` | combo_ssf_loan_aggregates | business | yes | 2 | 1 | 11 | 10 |
+| `combo_union_valuations.sql` | combo_union_valuations | business | yes | 0 | 3 | 5 | 13 |
 | `customer_latest_orders.sql` | customer_latest_orders | business | yes | 2 | 2 | 6 | 6 |
 | `customer_revenue.sql` | customer_revenue_clean | business | yes | 2 | 2 | 7 | 6 |
 | `customer_revenue_bad.sql` | customer_revenue | business | yes | 2 | 2 | 10 | 12 |
@@ -26,14 +33,16 @@ Files processed: **23**
 | `raw_orders.sql` | raw_orders | source | yes | 0 | 1 | 7 | 4 |
 | `source_derivations.sql` | source_derivations | business | yes | 0 | 2 | 13 | 1 |
 | `stg_customers.sql` | stg_customers | staging | yes | 0 | 1 | 7 | 5 |
+| `union_branch_with_user_cte.sql` | union_branch_with_user_cte | business | yes | 1 | 1 | 3 | 6 |
+| `union_distinct_skipped.sql` | union_distinct_skipped | business | yes | 0 | 1 | 2 | 7 |
 | `union_revenue_breakdown.sql` | union_revenue_breakdown | business | yes | 0 | 1 | 4 | 3 |
 | `union_with_layering.sql` | union_with_layering | business | yes | 0 | 2 | 4 | 9 |
 | `window_ranked_orders.sql` | window_ranked_orders | business | yes | 0 | 2 | 8 | 3 |
 
 ## Quality findings
 
-**Total:** 118 (error=4, warning=29, info=85)  
-**Auto-fixed:** 1
+**Total:** 189 (error=6, warning=54, info=129)  
+**Auto-fixed:** 4
 
 | File | Location | Rule | Severity | Auto-fixed | Message |
 |---|---|---|---|---|---|
@@ -46,6 +55,64 @@ Files processed: **23**
 | `chained_cte_pipeline.sql` | <file> | DERIVATION_IN_WHERE | info | no | IS [NOT] NULL on raw column 'email' inside WHERE |
 | `chained_cte_pipeline.sql` | <file> | WINDOW_NON_UNIQUE_ORDER | warning | no | ROW_NUMBER() ORDER BY (lifetime_revenue) may not be unique within partition |
 | `chained_cte_pipeline.sql` | <file> | MISSING_SOURCE_VERSION | info | no | Filename 'chained_cte_pipeline.sql' has fewer than 3 hyphen-separated parts; ... |
+| `combo_at_risk_customers.sql` | <file> | HARDCODED_DATE | info | no | Hardcoded date literal: '2026-05-12' |
+| `combo_at_risk_customers.sql` | <file> | HARDCODED_DATE | info | no | Hardcoded date literal: '2024-01-01' |
+| `combo_at_risk_customers.sql` | <file> | HARDCODED_DATE | info | no | Hardcoded date literal: '2023-01-01' |
+| `combo_at_risk_customers.sql` | <file> | METADATA_COLUMN_EXPOSED | warning | yes | Metadata column 'snapshot_date' exposed in output (as 'snapshot_date') |
+| `combo_at_risk_customers.sql` | <file> | METADATA_COLUMN_EXPOSED | warning | yes | Metadata column 'snapshot_date' exposed in output |
+| `combo_at_risk_customers.sql` | <file> | COMBINED_SOURCE_FILTERS | info | no | WHERE clause references columns from 3 sources (c, l, o) |
+| `combo_at_risk_customers.sql` | <file> | COMBINED_SOURCE_FILTERS | info | no | WHERE clause references columns from 2 sources (c, o) |
+| `combo_at_risk_customers.sql` | <file> | WINDOW_NON_UNIQUE_ORDER | warning | no | ROW_NUMBER() ORDER BY (customer_id) may not be unique within partition |
+| `combo_at_risk_customers.sql` | <file> | MISSING_SOURCE_VERSION | info | no | Filename 'combo_at_risk_customers.sql' has fewer than 3 hyphen-separated part... |
+| `combo_casting_at_final_only.sql` | <file> | DERIVATION_IN_WHERE | info | no | IS [NOT] NULL on raw column 'email' inside WHERE |
+| `combo_casting_at_final_only.sql` | <file> | COMBINED_SOURCE_FILTERS | info | no | WHERE clause references columns from 2 sources (c, o) |
+| `combo_casting_at_final_only.sql` | <file> | GROUPBY_NOT_ISOLATED | info | no | GROUP BY combined with WHERE and JOINs in a single SELECT |
+| `combo_casting_at_final_only.sql` | <file> | MISSING_SOURCE_VERSION | info | no | Filename 'combo_casting_at_final_only.sql' has fewer than 3 hyphen-separated ... |
+| `combo_comma_union_with_subqueries.sql` | <file> | MISSING_ALIAS | info | no | Table 'orders' has no alias in multi-table query |
+| `combo_comma_union_with_subqueries.sql` | <file> | MISSING_ALIAS | info | no | Table 'orders' has no alias in multi-table query |
+| `combo_comma_union_with_subqueries.sql` | <file> | MISSING_GROUP_BY | error | no | Aggregate function mixed with non-aggregated columns without GROUP BY |
+| `combo_comma_union_with_subqueries.sql` | <file> | MISSING_GROUP_BY | error | no | Aggregate function mixed with non-aggregated columns without GROUP BY |
+| `combo_comma_union_with_subqueries.sql` | <file> | DERIVATION_IN_WHERE | info | no | IS [NOT] NULL on raw column 'email' inside WHERE |
+| `combo_comma_union_with_subqueries.sql` | <file> | DERIVATION_IN_WHERE | info | no | IS [NOT] NULL on raw column 'email' inside WHERE |
+| `combo_comma_union_with_subqueries.sql` | <file> | INLINE_UNION_TRANSFORM | warning | no | Transformation inside UNION ALL branch: (SELECT MAX(amount) FROM raw.orders) ... |
+| `combo_comma_union_with_subqueries.sql` | <file> | INLINE_UNION_TRANSFORM | warning | no | WHERE clause inside UNION ALL branch |
+| `combo_comma_union_with_subqueries.sql` | <file> | INLINE_UNION_TRANSFORM | warning | no | Transformation inside UNION ALL branch: (SELECT MAX(amount) FROM raw.orders) ... |
+| `combo_comma_union_with_subqueries.sql` | <file> | INLINE_UNION_TRANSFORM | warning | no | WHERE clause inside UNION ALL branch |
+| `combo_comma_union_with_subqueries.sql` | <file> | MISSING_SOURCE_VERSION | info | no | Filename 'combo_comma_union_with_subqueries.sql' has fewer than 3 hyphen-sepa... |
+| `combo_filter_isolation.sql` | <file> | DERIVATION_IN_WHERE | info | no | IS [NOT] NULL on raw column 'country' inside WHERE |
+| `combo_filter_isolation.sql` | <file> | COMBINED_SOURCE_FILTERS | info | no | WHERE clause references columns from 3 sources (c, l, o) |
+| `combo_filter_isolation.sql` | <file> | MISSING_SOURCE_VERSION | info | no | Filename 'combo_filter_isolation.sql' has fewer than 3 hyphen-separated parts... |
+| `combo_nested_predicate_subqueries.sql` | <file> | MISSING_ALIAS | info | no | Table 'loans' has no alias in multi-table query |
+| `combo_nested_predicate_subqueries.sql` | <file> | DERIVATION_IN_WHERE | info | no | Function call (AVG) on column inside WHERE |
+| `combo_nested_predicate_subqueries.sql` | <file> | DERIVATION_IN_WHERE | info | no | Function call (AVG) on column inside WHERE |
+| `combo_nested_predicate_subqueries.sql` | <file> | COMBINED_SOURCE_FILTERS | info | no | WHERE clause references columns from 4 sources (c, l, l2, o) |
+| `combo_nested_predicate_subqueries.sql` | <file> | COMBINED_SOURCE_FILTERS | info | no | WHERE clause references columns from 2 sources (c, l2) |
+| `combo_nested_predicate_subqueries.sql` | <file> | COMBINED_SOURCE_FILTERS | info | no | WHERE clause references columns from 2 sources (l, o) |
+| `combo_nested_predicate_subqueries.sql` | <file> | MISSING_SOURCE_VERSION | info | no | Filename 'combo_nested_predicate_subqueries.sql' has fewer than 3 hyphen-sepa... |
+| `combo_nested_predicate_subqueries.sql` | <predicate> | SUBQUERY_NOT_LIFTED | info | no | Subquery inside GT left inline — non-IN/EXISTS predicate subquery; lifting wo... |
+| `combo_ssf_loan_aggregates.sql` | <file> | SELECT_STAR | warning | no | SELECT * detected - explicit column list recommended |
+| `combo_ssf_loan_aggregates.sql` | <file> | SELECT_STAR | warning | no | SELECT * detected - explicit column list recommended |
+| `combo_ssf_loan_aggregates.sql` | <file> | SELECT_STAR | warning | no | SELECT * detected - explicit column list recommended |
+| `combo_ssf_loan_aggregates.sql` | <file> | MISSING_ALIAS | info | no | Table 'customer' has no alias in multi-table query |
+| `combo_ssf_loan_aggregates.sql` | <file> | MISSING_ALIAS | info | no | Table 'loans' has no alias in multi-table query |
+| `combo_ssf_loan_aggregates.sql` | <file> | METADATA_COLUMN_EXPOSED | warning | yes | Metadata column 'snapshot_date' exposed in output (as 'snapshot_date') |
+| `combo_ssf_loan_aggregates.sql` | <file> | DERIVATION_IN_WHERE | info | no | IS [NOT] NULL on raw column 'country' inside WHERE |
+| `combo_ssf_loan_aggregates.sql` | <file> | COMBINED_SOURCE_FILTERS | info | no | WHERE clause references columns from 2 sources (c, l) |
+| `combo_ssf_loan_aggregates.sql` | <file> | GROUPBY_NOT_ISOLATED | info | no | GROUP BY combined with WHERE and JOINs in a single SELECT |
+| `combo_ssf_loan_aggregates.sql` | <file> | MISSING_SOURCE_VERSION | info | no | Filename 'combo_ssf_loan_aggregates.sql' has fewer than 3 hyphen-separated pa... |
+| `combo_union_valuations.sql` | <file> | SELECT_STAR | warning | no | SELECT * detected - explicit column list recommended |
+| `combo_union_valuations.sql` | <file> | SELECT_STAR | warning | no | SELECT * detected - explicit column list recommended |
+| `combo_union_valuations.sql` | <file> | SELECT_STAR | warning | no | SELECT * detected - explicit column list recommended |
+| `combo_union_valuations.sql` | <file> | INLINE_UNION_TRANSFORM | warning | no | Transformation inside UNION ALL branch: CAST(SUM(l.principal_amount) AS DECIM... |
+| `combo_union_valuations.sql` | <file> | INLINE_UNION_TRANSFORM | warning | no | WHERE clause inside UNION ALL branch |
+| `combo_union_valuations.sql` | <file> | INLINE_UNION_TRANSFORM | warning | no | Transformation inside UNION ALL branch: CAST(COUNT(DISTINCT o.order_date) AS ... |
+| `combo_union_valuations.sql` | <file> | INLINE_UNION_TRANSFORM | warning | no | Transformation inside UNION ALL branch: CAST(SUM(l.principal_amount) AS DECIM... |
+| `combo_union_valuations.sql` | <file> | INLINE_UNION_TRANSFORM | warning | no | WHERE clause inside UNION ALL branch |
+| `combo_union_valuations.sql` | <file> | INLINE_UNION_TRANSFORM | warning | no | Transformation inside UNION ALL branch: CAST(SUM(o.amount) AS DECIMAL(18, 2))... |
+| `combo_union_valuations.sql` | <file> | INLINE_UNION_TRANSFORM | warning | no | WHERE clause inside UNION ALL branch |
+| `combo_union_valuations.sql` | <file> | GROUPBY_NOT_ISOLATED | info | no | GROUP BY combined with WHERE and JOINs in a single SELECT |
+| `combo_union_valuations.sql` | <file> | GROUPBY_NOT_ISOLATED | info | no | GROUP BY combined with WHERE and JOINs in a single SELECT |
+| `combo_union_valuations.sql` | <file> | MISSING_SOURCE_VERSION | info | no | Filename 'combo_union_valuations.sql' has fewer than 3 hyphen-separated parts... |
 | `customer_latest_orders.sql` | <file> | MISSING_ALIAS | info | no | Table 'customer_latest_orders' has no alias in multi-table query |
 | `customer_latest_orders.sql` | <file> | MISSING_ALIAS | info | no | Table 'raw_orders' has no alias in multi-table query |
 | `customer_latest_orders.sql` | <file> | MISSING_ALIAS | info | no | Table 'ordered_orders' has no alias in multi-table query |
@@ -140,6 +207,19 @@ Files processed: **23**
 | `stg_customers.sql` | <file> | DERIVATION_IN_WHERE | info | no | IS [NOT] NULL on raw column 'customer_id' inside WHERE |
 | `stg_customers.sql` | <file> | PK_DEDUP_CHECK_MISSING | info | no | @pk annotations present but no ROW_NUMBER PARTITION BY <pk> for dedup verific... |
 | `stg_customers.sql` | <file> | MISSING_SOURCE_VERSION | info | no | Filename 'stg_customers.sql' has fewer than 3 hyphen-separated parts; movemen... |
+| `union_branch_with_user_cte.sql` | <file> | MISSING_ALIAS | info | no | Table 'orders' has no alias in multi-table query |
+| `union_branch_with_user_cte.sql` | <file> | MISSING_ALIAS | info | no | Table 'orders' has no alias in multi-table query |
+| `union_branch_with_user_cte.sql` | <file> | HARDCODED_DATE | info | no | Hardcoded date literal: '2024-01-01' |
+| `union_branch_with_user_cte.sql` | <file> | INLINE_UNION_TRANSFORM | warning | no | WHERE clause inside UNION ALL branch |
+| `union_branch_with_user_cte.sql` | <file> | INLINE_UNION_TRANSFORM | warning | no | WHERE clause inside UNION ALL branch |
+| `union_branch_with_user_cte.sql` | <file> | MISSING_SOURCE_VERSION | info | no | Filename 'union_branch_with_user_cte.sql' has fewer than 3 hyphen-separated p... |
+| `union_distinct_skipped.sql` | <file> | MISSING_ALIAS | info | no | Table 'customer' has no alias in multi-table query |
+| `union_distinct_skipped.sql` | <file> | MISSING_ALIAS | info | no | Table 'customer' has no alias in multi-table query |
+| `union_distinct_skipped.sql` | <file> | INLINE_UNION_TRANSFORM | warning | no | WHERE clause inside UNION ALL branch |
+| `union_distinct_skipped.sql` | <file> | INLINE_UNION_TRANSFORM | warning | no | WHERE clause inside UNION ALL branch |
+| `union_distinct_skipped.sql` | <file> | UNION_MISSING_SOURCE_TAG | info | no | UNION ALL branch lacks a source-identifying literal column |
+| `union_distinct_skipped.sql` | <file> | UNION_MISSING_SOURCE_TAG | info | no | UNION ALL branch lacks a source-identifying literal column |
+| `union_distinct_skipped.sql` | <file> | MISSING_SOURCE_VERSION | info | no | Filename 'union_distinct_skipped.sql' has fewer than 3 hyphen-separated parts... |
 | `union_revenue_breakdown.sql` | <file> | INLINE_UNION_TRANSFORM | warning | no | WHERE clause inside UNION ALL branch |
 | `union_revenue_breakdown.sql` | <file> | INLINE_UNION_TRANSFORM | warning | no | WHERE clause inside UNION ALL branch |
 | `union_revenue_breakdown.sql` | <file> | MISSING_SOURCE_VERSION | info | no | Filename 'union_revenue_breakdown.sql' has fewer than 3 hyphen-separated part... |
@@ -158,7 +238,7 @@ Files processed: **23**
 
 ## Mapping coverage
 
-**129/137** output columns have a resolved source attribute (94%)
+**175/191** output columns have a resolved source attribute (92%)
 
 ## Cross-file lineage
 
@@ -190,6 +270,13 @@ flowchart LR
   subgraph business
     agg_customer_summary["agg_customer_summary<br/><i>agg_customer_summary.sql</i>"]
     chained_cte_pipeline["chained_cte_pipeline<br/><i>chained_cte_pipeline.sql</i>"]
+    combo_at_risk_customers["combo_at_risk_customers<br/><i>combo_at_risk_customers.sql</i>"]
+    combo_casting_at_final_only["combo_casting_at_final_only<br/><i>combo_casting_at_final_only.sql</i>"]
+    combo_comma_union_with_subqueries["combo_comma_union_with_subqueries<br/><i>combo_comma_union_with_subqueries.sql</i>"]
+    combo_filter_isolation["combo_filter_isolation<br/><i>combo_filter_isolation.sql</i>"]
+    combo_nested_predicate_subqueries["combo_nested_predicate_subqueries<br/><i>combo_nested_predicate_subqueries.sql</i>"]
+    combo_ssf_loan_aggregates["combo_ssf_loan_aggregates<br/><i>combo_ssf_loan_aggregates.sql</i>"]
+    combo_union_valuations["combo_union_valuations<br/><i>combo_union_valuations.sql</i>"]
     customer_latest_orders["customer_latest_orders<br/><i>customer_latest_orders.sql</i>"]
     customer_revenue_clean["customer_revenue_clean<br/><i>customer_revenue.sql</i>"]
     customer_revenue["customer_revenue<br/><i>customer_revenue_bad.sql</i>"]
@@ -205,6 +292,8 @@ flowchart LR
     passthrough_with_loans["passthrough_with_loans<br/><i>passthrough_with_loans.sql</i>"]
     predicate_subqueries["predicate_subqueries<br/><i>predicate_subqueries.sql</i>"]
     source_derivations["source_derivations<br/><i>source_derivations.sql</i>"]
+    union_branch_with_user_cte["union_branch_with_user_cte<br/><i>union_branch_with_user_cte.sql</i>"]
+    union_distinct_skipped["union_distinct_skipped<br/><i>union_distinct_skipped.sql</i>"]
     union_revenue_breakdown["union_revenue_breakdown<br/><i>union_revenue_breakdown.sql</i>"]
     union_with_layering["union_with_layering<br/><i>union_with_layering.sql</i>"]
     window_ranked_orders["window_ranked_orders<br/><i>window_ranked_orders.sql</i>"]
@@ -231,6 +320,13 @@ flowchart LR
   ext_landing_oms_orders_export --> raw_orders
   ext_raw_customer --> agg_customer_summary
   ext_raw_customer --> chained_cte_pipeline
+  ext_raw_customer --> combo_at_risk_customers
+  ext_raw_customer --> combo_casting_at_final_only
+  ext_raw_customer --> combo_comma_union_with_subqueries
+  ext_raw_customer --> combo_filter_isolation
+  ext_raw_customer --> combo_nested_predicate_subqueries
+  ext_raw_customer --> combo_ssf_loan_aggregates
+  ext_raw_customer --> combo_union_valuations
   ext_raw_customer --> distinct_customers
   ext_raw_customer --> except_subscribed_customers
   ext_raw_customer --> filtered_high_value
@@ -241,12 +337,23 @@ flowchart LR
   ext_raw_customer --> passthrough_with_loans
   ext_raw_customer --> predicate_subqueries
   ext_raw_customer --> source_derivations
+  ext_raw_customer --> union_distinct_skipped
   ext_raw_customer --> union_with_layering
   ext_raw_customer --> window_ranked_orders
+  ext_raw_loans --> combo_at_risk_customers
+  ext_raw_loans --> combo_filter_isolation
+  ext_raw_loans --> combo_nested_predicate_subqueries
+  ext_raw_loans --> combo_union_valuations
   ext_raw_loans --> passthrough_with_loans
   ext_raw_loans --> predicate_subqueries
   ext_raw_orders --> agg_customer_summary
   ext_raw_orders --> chained_cte_pipeline
+  ext_raw_orders --> combo_at_risk_customers
+  ext_raw_orders --> combo_casting_at_final_only
+  ext_raw_orders --> combo_comma_union_with_subqueries
+  ext_raw_orders --> combo_filter_isolation
+  ext_raw_orders --> combo_nested_predicate_subqueries
+  ext_raw_orders --> combo_union_valuations
   ext_raw_orders --> except_subscribed_customers
   ext_raw_orders --> filtered_high_value
   ext_raw_orders --> having_top_spenders
@@ -255,6 +362,7 @@ flowchart LR
   ext_raw_orders --> ordered_top_customers
   ext_raw_orders --> predicate_subqueries
   ext_raw_orders --> source_derivations
+  ext_raw_orders --> union_branch_with_user_cte
   ext_raw_orders --> union_revenue_breakdown
   ext_raw_orders --> union_with_layering
   ext_raw_orders --> window_ranked_orders
@@ -266,6 +374,13 @@ flowchart LR
 |---|---|---|---|
 | `agg_customer_summary.sql` | agg_customer_summary | 0 | — |
 | `chained_cte_pipeline.sql` | chained_cte_pipeline | 0 | — |
+| `combo_at_risk_customers.sql` | combo_at_risk_customers | 0 | — |
+| `combo_casting_at_final_only.sql` | combo_casting_at_final_only | 0 | — |
+| `combo_comma_union_with_subqueries.sql` | combo_comma_union_with_subqueries | 0 | — |
+| `combo_filter_isolation.sql` | combo_filter_isolation | 0 | — |
+| `combo_nested_predicate_subqueries.sql` | combo_nested_predicate_subqueries | 0 | — |
+| `combo_ssf_loan_aggregates.sql` | combo_ssf_loan_aggregates | 0 | — |
+| `combo_union_valuations.sql` | combo_union_valuations | 0 | — |
 | `customer_latest_orders.sql` | customer_latest_orders | 3 | derived, fk, pk |
 | `customer_revenue.sql` | customer_revenue_clean | 1 | pk |
 | `customer_revenue_bad.sql` | customer_revenue | 1 | pk |
@@ -284,6 +399,8 @@ flowchart LR
 | `raw_orders.sql` | raw_orders | 2 | business_key, fk, pk |
 | `source_derivations.sql` | source_derivations | 0 | — |
 | `stg_customers.sql` | stg_customers | 3 | business_key, pii, pk |
+| `union_branch_with_user_cte.sql` | union_branch_with_user_cte | 0 | — |
+| `union_distinct_skipped.sql` | union_distinct_skipped | 0 | — |
 | `union_revenue_breakdown.sql` | union_revenue_breakdown | 0 | — |
 | `union_with_layering.sql` | union_with_layering | 0 | — |
 | `window_ranked_orders.sql` | window_ranked_orders | 0 | — |

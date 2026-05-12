@@ -1,0 +1,7 @@
+"target_model_name","target_table_name","target_column_name","source_model_name","source_table_name","source_column_name","derived_indicator","movement_expression","dependency_type","source_version"
+"Converter","combo_union_valuations","customer_id","RAW","customer","customer_id","false","c.customer_id AS customer_id","strict",""
+"Converter","combo_union_valuations","country","RAW","customer","country","false","c.country AS country","strict",""
+"Converter","combo_union_valuations","amount","RAW","orders","order_date","true","CAST(COUNT(DISTINCT o.order_date) AS DECIMAL(18, 2)) AS amount","strict",""
+"Converter","combo_union_valuations","line_count","SSF","","","true","COUNT(*) AS line_count","strict",""
+"Converter","combo_union_valuations","valuation_type","SSF","","","true","'active_days' AS valuation_type","strict",""
+"Converter","combo_union_valuations","","RAW","loans","","false","","strict",""

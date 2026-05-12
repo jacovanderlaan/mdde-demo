@@ -1,0 +1,6 @@
+"target_model_name","target_table_name","target_column_name","source_model_name","source_table_name","source_column_name","derived_indicator","movement_expression","dependency_type","source_version"
+"Converter","combo_nested_predicate_subqueries","customer_id","RAW","customer","customer_id","false","c.customer_id AS customer_id","strict",""
+"Converter","combo_nested_predicate_subqueries","country","RAW","customer","country","false","c.country AS country","strict",""
+"Converter","combo_nested_predicate_subqueries","email","RAW","customer","email","false","c.email AS email","strict",""
+"Converter","combo_nested_predicate_subqueries","","RAW","loans","","false","","strict",""
+"Converter","combo_nested_predicate_subqueries","","RAW","orders","","false","","strict",""
