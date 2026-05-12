@@ -724,6 +724,58 @@ class TestMetadataMatchingCaseInsensitive:
         assert "id > 0" in out
 
 
+class TestMetadataStrippingFromJoinOn:
+
+    def test_strips_qualified_metadata_predicate_from_join_on(self):
+        """Customer-reported case: `prp.snapshot_date = fp.snapshot_date`
+        in a LEFT JOIN ON clause must be stripped."""
+        from sql_process import strip_metadata_columns
+        sql = """SELECT prp.id FROM prp
+        LEFT JOIN fp
+            ON fp.arrangement_id = prp.product
+           AND prp.snapshot_date = fp.snapshot_date
+           AND prp.delivery_set = fp.delivery_set"""
+        log = TransformLog()
+        out = strip_metadata_columns(
+            sql, [],
+            ["snapshot_date", "delivery_set"],
+            log,
+        )
+        assert "snapshot_date" not in out
+        assert "delivery_set" not in out
+        # Real join condition kept.
+        assert "fp.arrangement_id = prp.product" in out.replace('"', '')
+        assert log.metadata_columns_stripped is True
+
+    def test_join_on_emptied_emits_warning_finding(self):
+        """When stripping empties an ON clause entirely, the rule
+        keeps the strip but emits a JOIN_ON_EMPTIED_BY_METADATA_STRIP
+        finding."""
+        from sql_process import strip_metadata_columns
+        sql = """SELECT id FROM a
+        LEFT JOIN b ON a.snapshot_date = b.snapshot_date"""
+        log = TransformLog()
+        findings = []
+        out = strip_metadata_columns(
+            sql, findings, ["snapshot_date"], log,
+        )
+        assert "snapshot_date" not in out
+        # The strip went through. A finding was added.
+        assert any(
+            f.rule == "JOIN_ON_EMPTIED_BY_METADATA_STRIP" for f in findings
+        )
+
+    def test_join_on_preserved_when_no_metadata_predicates(self):
+        """No metadata predicate in the ON clause → ON survives intact."""
+        from sql_process import strip_metadata_columns
+        sql = """SELECT a.id FROM a
+        LEFT JOIN b ON a.id = b.id AND a.code = b.code"""
+        log = TransformLog()
+        out = strip_metadata_columns(sql, [], ["snapshot_date"], log)
+        assert "a.id = b.id" in out.replace('"', '')
+        assert "a.code = b.code" in out.replace('"', '')
+
+
 class TestCommentBannerStripping:
 
     def test_strips_conversion_summary_banner(self):

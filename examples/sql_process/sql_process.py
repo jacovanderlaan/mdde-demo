@@ -1559,14 +1559,15 @@ def strip_metadata_columns(
     metadata_blacklist: List[str],
     log: TransformLog,
 ) -> str:
-    """Rule 4 / 13: remove blacklisted metadata columns from
-    every SELECT's projections, and remove any WHERE predicate
-    that compares one of these columns. If the WHERE ends up
-    empty, drop it entirely.
+    """Rule 4 / 13: remove blacklisted metadata columns from every
+    SELECT's projections, from every WHERE predicate, AND from every
+    JOIN ON predicate. If a WHERE / JOIN ON ends up empty, drop the
+    whole clause.
 
-    Conservative: only strips exact name matches from projections
-    and only strips equality / comparison / IS-NULL predicates from
-    WHERE where one operand is a bare metadata column.
+    Conservative: only strips exact name matches (case-insensitive)
+    on bare or qualified column references. Predicates that touch a
+    metadata column on either operand are dropped wholesale —
+    including ``prp.snapshot_date = fp.snapshot_date`` join keys.
     """
     if not metadata_blacklist:
         return sql
@@ -1581,8 +1582,8 @@ def strip_metadata_columns(
     stripped_columns: Set[str] = set()
 
     def _matches_metadata(node: exp.Expression) -> Optional[str]:
-        """Return the metadata-column name if ``node`` is a bare
-        Column reference to one. Else None."""
+        """Return the metadata-column name if ``node`` is a (possibly
+        qualified) Column reference to one. Else None."""
         col = node
         if isinstance(col, exp.Alias):
             col = col.this
@@ -1592,17 +1593,41 @@ def strip_metadata_columns(
 
     def _predicate_touches_metadata(pred: exp.Expression) -> Optional[str]:
         """Return the metadata column name if a leaf predicate
-        references one (in either operand or via IS [NOT] NULL)."""
+        references one (in either operand or via IS [NOT] NULL).
+        Walks the whole predicate subtree so qualified refs on either
+        side of an equality (``prp.snapshot_date = fp.snapshot_date``)
+        are caught."""
         if isinstance(pred, (exp.EQ, exp.NEQ, exp.GT, exp.GTE, exp.LT, exp.LTE, exp.Like, exp.In)):
-            for child in (pred.this, pred.args.get("expression")):
-                m = _matches_metadata(child) if child is not None else None
-                if m:
-                    return m
+            for col in pred.find_all(exp.Column):
+                if col.name.lower() in blacklist:
+                    return col.name
+            return None
         if isinstance(pred, exp.Is):
             m = _matches_metadata(pred.this)
             if m:
                 return m
         return None
+
+    def _strip_predicate_tree(
+        clause: Optional[exp.Expression],
+    ) -> Tuple[Optional[exp.Expression], bool]:
+        """Split an AND-tree into leaves, drop ones touching metadata,
+        rebuild. Returns ``(new_tree_or_None, changed)``."""
+        if clause is None:
+            return None, False
+        parts = _split_and(clause)
+        kept_parts: List[exp.Expression] = []
+        changed = False
+        for p in parts:
+            m = _predicate_touches_metadata(p)
+            if m is not None:
+                stripped_columns.add(m)
+                changed = True
+                continue
+            kept_parts.append(p)
+        if not changed:
+            return clause, False
+        return _rebuild_and(kept_parts), True
 
     for stmt in statements:
         if stmt is None:
@@ -1629,24 +1654,42 @@ def strip_metadata_columns(
 
             # 2. Strip metadata-column predicates from WHERE.
             where = select.args.get("where")
-            if where is None:
-                continue
-            parts = _split_and(where.this) if where.this is not None else []
-            kept_parts = []
-            for p in parts:
-                m = _predicate_touches_metadata(p)
-                if m is not None:
-                    stripped_columns.add(m)
+            if where is not None and where.this is not None:
+                new_where, changed = _strip_predicate_tree(where.this)
+                if changed:
+                    if new_where is None:
+                        select.set("where", None)
+                    else:
+                        where.set("this", new_where)
+
+            # 3. Strip metadata-column predicates from every JOIN ON.
+            for join in select.args.get("joins") or []:
+                on = join.args.get("on")
+                new_on, changed = _strip_predicate_tree(on)
+                if not changed:
                     continue
-                kept_parts.append(p)
-            if len(kept_parts) == len(parts):
-                continue  # nothing changed in this WHERE
-            new_where = _rebuild_and(kept_parts)
-            if new_where is None:
-                # All predicates were metadata-only — drop WHERE entirely.
-                select.set("where", None)
-            else:
-                where.set("this", new_where)
+                if new_on is None:
+                    # All ON predicates were metadata-only. Drop the
+                    # ``on`` slot — note that this turns a regular
+                    # join into a cartesian product, which is almost
+                    # never what the analyst wanted. Emit a finding
+                    # so it's visible, but apply the strip anyway
+                    # since the rule unambiguously says "remove the
+                    # metadata predicate".
+                    join.set("on", None)
+                    findings.append(QualityFinding(
+                        rule="JOIN_ON_EMPTIED_BY_METADATA_STRIP",
+                        severity="warning",
+                        location="<join>",
+                        message=(
+                            "JOIN ON clause was emptied by metadata-column "
+                            "stripping; verify the resulting cartesian join "
+                            "is intentional or move the join key to a "
+                            "non-metadata column"
+                        ),
+                    ))
+                else:
+                    join.set("on", new_on)
 
     if not stripped_columns:
         return sql
