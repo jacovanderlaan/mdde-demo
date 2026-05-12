@@ -1,0 +1,8 @@
+"target_model_name","target_table_name","target_column_name","source_model_name","source_table_name","source_column_name","derived_indicator","movement_expression","dependency_type"
+"SSF","raw_customers","customer_id","SSF_SOURCE","landing.crm_customers_export","customer_id","false","crm_customers_export.customer_id AS customer_id","strict"
+"SSF","raw_customers","first_name","SSF_SOURCE","landing.crm_customers_export","first_name","false","crm_customers_export.first_name AS first_name","strict"
+"SSF","raw_customers","last_name","SSF_SOURCE","landing.crm_customers_export","last_name","false","crm_customers_export.last_name AS last_name","strict"
+"SSF","raw_customers","email","SSF_SOURCE","landing.crm_customers_export","email","false","crm_customers_export.email AS email","strict"
+"SSF","raw_customers","phone","SSF_SOURCE","landing.crm_customers_export","phone","false","crm_customers_export.phone AS phone","strict"
+"SSF","raw_customers","created_at","SSF_SOURCE","landing.crm_customers_export","created_at","false","crm_customers_export.created_at AS created_at","strict"
+"SSF","raw_customers","source_system","SSF_SOURCE","landing.crm_customers_export","source_system","false","crm_customers_export.source_system AS source_system","strict"

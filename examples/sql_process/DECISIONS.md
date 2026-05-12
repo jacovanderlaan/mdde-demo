@@ -1,0 +1,512 @@
+# sql_process — design decisions log
+
+This file records every interactive decision made while extending
+`sql_process`. Each entry has:
+
+- **Question** — what option-set was put to the user
+- **Decision** — the option chosen
+- **Why it matters** — what behaviour the alternatives would have
+  produced, and why this one was preferred
+- **Reflected in code at** — where the decision is enforced
+
+Read this file when extending the script, or when an output looks
+"wrong" but was in fact deliberate. The alternatives we rejected
+are listed too, so a future contributor can re-litigate with the
+full context.
+
+---
+
+## Subquery → CTE lifting
+
+### D1. Which subquery shapes to lift
+
+- **Question:** which inline subquery patterns should be rewritten
+  into named CTEs?
+- **Decision:** lift derived tables in FROM/JOIN, scalar subqueries
+  in SELECT projections, and UNION subqueries wrapped in a FROM
+  clause. Leave WHERE-IN / EXISTS / comparison predicates inline.
+- **Why it matters:**
+  - **Derived tables in FROM/JOIN** are pure aliases — moving them
+    to a CTE preserves semantics and improves readability.
+  - **Scalar subqueries in SELECT** can be lifted only if the inner
+    SELECT has a single projection. Otherwise the wrapper
+    `(SELECT col FROM cte)` wouldn't compile back to a scalar
+    value. (Conservative single-column-only rule enforced in code.)
+  - **UNION wrapped in FROM** is structurally identical to a
+    derived table — same lift logic.
+  - **WHERE IN / EXISTS** subqueries are boolean predicates, not
+    table-like values. Rewriting them as a join-with-DISTINCT
+    changes row counts in pathological cases.
+- **Rejected:** "lift everything we can find" — would break the
+  predicate cases.
+- **Reflected in code at:** `lift_subqueries_to_ctes()`, candidate
+  collection loop. Predicates are routed to the `non_candidates`
+  list and produce `SUBQUERY_NOT_LIFTED` findings.
+
+### D2. CTE naming for lifted subqueries
+
+- **Question:** what should the generated CTEs be named?
+- **Decision:** prefer the existing subquery alias when present;
+  fall back to `_sub1`, `_sub2`, ... otherwise.
+- **Why it matters:** if the analyst wrote `FROM (SELECT ...) AS
+  recent_orders`, the alias already carries intent. Promoting it
+  to a CTE name preserves that intent in the output. Numeric
+  fallbacks are stable across re-runs and never collide with
+  existing CTEs.
+- **Rejected:**
+  - "Always numeric" — loses the analyst's intent.
+  - "Derive from the inner table" — heuristic, brittle when the
+    subquery touches multiple tables.
+- **Reflected in code at:** `_make_cte_name()`.
+
+### D3. Safety policy for non-liftable subqueries
+
+- **Question:** when a subquery can't safely be lifted, do we still
+  try, do we skip silently, or do we skip and flag?
+- **Decision:** skip and emit a `SUBQUERY_NOT_LIFTED` info finding.
+- **Why it matters:** silent skip means the user can't tell what we
+  did and didn't touch. Aggressive lift could produce wrong SQL.
+  The middle ground is "always conservative, always observable."
+- **Rejected:**
+  - "Skip silently" — no signal to the user.
+  - "Lift anyway with a comment" — can change semantics.
+- **Reflected in code at:** `lift_subqueries_to_ctes()` `non_candidates`
+  loop and the correlated/predicate-detection branches.
+
+---
+
+## Single-table projection pushdown
+
+### D4. Which expressions count as single-table
+
+- **Question:** what expression shapes are "single-table enough" to
+  push into a `<table>_proj` CTE?
+- **Decision:** all four offered shapes — direct refs, renames,
+  single-column derivations, single-table multi-column expressions
+  (CASE with multiple cols from one table, AND of one table's
+  predicates, etc.).
+- **Why it matters:** the goal is to free the outer SELECT from
+  any work it doesn't strictly need to do. Including multi-column
+  single-table expressions captures common patterns like `CASE
+  WHEN c.country = 'NL' AND c.created_at > '2026-01-01' THEN ...`.
+- **Rejected:** none — the user opted in to every option.
+- **Reflected in code at:** `_is_pushable_projection()` (filters
+  out aggregates, windows, subqueries, `*`) and
+  `_expression_uses_only()` (the single-table check).
+
+### D5. Naming the per-source CTE
+
+- **Question:** what should the projection-pushdown CTEs be named?
+- **Decision:** `<table>_proj` (e.g., `stg_customers_proj`).
+- **Why it matters:** the suffix makes the intent obvious and the
+  full table name avoids cryptic single-letter naming. A second
+  pushdown for the same table in the same file would collide with
+  the existing `stg_customers` source table only if we used `stg_*`
+  prefix instead — the `_proj` suffix sidesteps that.
+- **Rejected:**
+  - `<alias>_proj` — cryptic out of context.
+  - `stg_<table>` — collides with existing staging conventions.
+- **Reflected in code at:** `push_projections_to_source_ctes()`,
+  CTE-name generation block.
+
+### D6. Non-pushable projections
+
+- **Question:** how to handle projections that can't be pushed
+  (aggregates, windows, cross-table expressions)?
+- **Decision:** keep them in the outer SELECT, no findings.
+- **Why it matters:** these are exactly what the outer SELECT
+  *should* be doing — joining multiple tables together with
+  cross-table work. Flagging them would be noise; failing the
+  whole file is too strict.
+- **Rejected:**
+  - "Push everything we can + flag the rest" — extra noise.
+  - "Skip the whole file if any projection is unpushable" — would
+    rarely fire and disable a useful optimisation.
+- **Reflected in code at:** `push_projections_to_source_ctes()`'s
+  outer-projection walk leaves unpushable items in
+  `new_outer_projections`.
+
+### D7. WHERE clause pushdown
+
+- **Question:** should single-table WHERE predicates also be
+  pushed into the matching `_proj` CTE?
+- **Decision:** yes — push single-table predicates alongside the
+  projections.
+- **Why it matters:** filter pushdown produces strictly smaller
+  intermediate result sets at the join. Standard optimisation, no
+  semantic risk.
+- **Rejected:**
+  - "Leave WHERE untouched" — would push half the work but leave
+    the rest, weirdly asymmetric.
+  - "Only push WHERE for tables that already get a _proj CTE" —
+    same effect as the chosen approach since a table with no
+    projections to push wouldn't gain a `_proj` CTE either way.
+    (The code does build a CTE for filter-only sources; see D11.)
+- **Reflected in code at:** `push_projections_to_source_ctes()`'s
+  WHERE-walk routes each leaf predicate (split on AND) to the
+  matching plan, or keeps it in the outer WHERE if cross-table.
+
+### D8. Existing CTEs in the outer FROM
+
+- **Question:** if the outer FROM references a CTE (not a base
+  table), should pushdown still wrap it in a `_proj` CTE?
+- **Decision:** skip — only push to base tables, leave existing
+  CTEs untouched.
+- **Why it matters:** existing CTEs (`shipped_orders`,
+  `customer_totals`) often already do per-source work. Wrapping
+  them in another `_proj` CTE creates noise without value.
+  Skipping them respects the analyst's existing structure.
+- **Rejected:**
+  - "Push for everything, including CTEs" — produces
+    `customer_totals_proj` on top of `customer_totals`, noisy.
+  - "Push only when the existing CTE doesn't already do
+    projections" — heuristic and hard to predict.
+- **Reflected in code at:**
+  `push_projections_to_source_ctes()`'s `collect_table()` helper
+  routes CTE-named tables to `other_aliases` (excluded from
+  pushdown plans) rather than `sources`.
+
+### D9. Identity CTEs
+
+- **Question:** should we create a `_proj` CTE for a source that
+  has nothing to push (no renames, no derivations, no
+  single-table filters)?
+- **Decision:** skip — never create identity wrappers.
+- **Why it matters:** wrapping a source in
+  `SELECT * FROM raw_orders` adds no information and clutters the
+  output. Pushdown should only fire when it actually changes
+  something.
+- **Rejected:**
+  - "Always create _proj for every source" — verbose, identity
+    CTEs.
+  - "Create _proj only when at least 2 columns are picked" —
+    arbitrary threshold.
+- **Reflected in code at:**
+  `push_projections_to_source_ctes()`'s bail-out check
+  `if not any(p.projections or p.predicates for p in plans.values())`.
+
+---
+
+## Genie prompt emitter
+
+### D10. Where the prompt is derived from
+
+- **Question:** should the Genie prompt describe the original
+  query or the optimised output?
+- **Decision:** derive from the **original** parsed AST.
+- **Why it matters:** Genie should see the analyst's *intent*, not
+  the script's optimisation steps. If Genie can produce the same
+  result from the unoptimised description, the optimisation
+  becomes verifiable by external comparison.
+- **Rejected:** "from the optimised SQL" — would conflate intent
+  and implementation.
+- **Reflected in code at:** `emit_genie_prompt()` consumes
+  `pf.parsed` (the AST captured before `apply_auto_fixes`).
+
+### D11. Conditional sections in the prompt
+
+- **Question:** when a query has no UNIONs / no derivations / no
+  LIMIT / etc., should the prompt still emit "Unions: none" type
+  sections?
+- **Decision:** sections appear ONLY when they have content.
+- **Why it matters:** Genie is an LLM. Filler instructions eat
+  tokens and dilute attention. A prompt with nine
+  "Section: none" lines and one real instruction is worse than a
+  prompt with just the real instruction.
+- **Rejected:** "always emit every section for consistency."
+- **Reflected in code at:** `emit_genie_prompt()`'s eight
+  conditional sections (goal line always; sources, joins,
+  filters, group-by, return columns, sort, limit only when
+  present).
+
+### D12. Identifier quoting in the prompt
+
+- **Question:** keep `qualify()`'s identifier quoting, or strip?
+- **Decision:** strip — render unquoted for readability.
+- **Why it matters:** `"customer_totals" AS "t"` is harder to read
+  than `customer_totals AS t`. Genie understands either, but
+  prose is for humans first.
+- **Reflected in code at:** `_unquoted_sql()` helper, used by
+  every section emitter that calls `.sql()`.
+
+### D13. What the prompt deliberately excludes
+
+- **Decision** (no explicit question, decided in the doc):
+  - No metadata headers
+  - No annotation tags (`@pii`, `@pk`, etc.) — those live in
+    the entity YAML
+  - No schema dumps — Genie has its own INFORMATION_SCHEMA
+  - No commentary about why the query was written
+  - No optimisation hints
+- **Why it matters:** keeps the prompt actionable and short.
+  Annotations belong in the entity YAML where they're queryable
+  programmatically. Schema info is a separate concern.
+
+---
+
+## Output folder layout
+
+### D14. Per-query folders vs per-artefact-type folders
+
+- **Question:** keep the original `optimized/`, `mapping/`,
+  `annotations/`, `genie/` top-level folders, or restructure to
+  one folder per query?
+- **Decision:** per-query folders.
+- **Why it matters:** every artefact for one input SQL file lives
+  together — drop a folder into a code review, a ticket, or a
+  shared drive and the reader has everything they need (rewritten
+  SQL, mapping, Genie prompt, findings) side by side. The
+  per-artefact-type layout required scrolling across four
+  separate folders to assemble one query's full picture.
+- **Reflected in code at:** `process_folder()` writes
+  `<output>/<rel.parent>/<stem>/<artefact>` instead of
+  `<output>/<artefact>/<rel.parent>/<stem>.<ext>`.
+
+### D15. Per-query folder name
+
+- **Question:** SQL filename, `@mdde-entity`, or hybrid?
+- **Decision:** SQL filename stem.
+- **Why it matters:** filename is the canonical input identifier.
+  It's stable, predictable, mirrors the input layout, and avoids
+  collisions when two files happen to declare the same entity
+  name (which is a copy-paste bug we'd otherwise paper over).
+- **Rejected:**
+  - "@mdde-entity if present, else filename" — two files
+    declaring the same entity collide.
+  - "Both, hyphenated" — verbose folder names.
+- **Reflected in code at:** `process_folder()`'s
+  `query_dir = output_dir / rel.parent / rel.stem`.
+
+### D16. Per-query findings file
+
+- **Question:** add a `findings.md` per query, a plain-text
+  `log.txt`, or skip and keep findings only in the run-level
+  `report.md`?
+- **Decision:** `findings.md` per query — markdown, scoped subset
+  of `report.md`.
+- **Why it matters:** the per-query folder should be
+  self-contained. A reader looking at one folder shouldn't need
+  to open the run-level report to know what's flagged. Same
+  format (markdown table) makes it copy-pasteable into tickets.
+- **Rejected:**
+  - "log.txt" — closer to a build log, less useful for review.
+  - "Skip" — defeats the self-contained-folder principle.
+- **Reflected in code at:** `emit_findings_md(pf, findings)`,
+  called once per file in the orchestrator.
+
+### D17. Recursive-mode subfolder handling
+
+- **Question:** in `--recursive` mode, preserve input subfolders
+  above the per-query folder, or flatten with path-in-name?
+- **Decision:** preserve subfolders.
+- **Why it matters:** mirroring the input tree makes the output
+  navigable in the same mental model as the source. Flattened
+  names with `__` separators are easier to script over but
+  harder to read.
+- **Reflected in code at:** `process_folder()`'s
+  `rel.parent / rel.stem` path construction.
+
+---
+
+## Movement CSV (customer-specific mapping format)
+
+### D18. How configurable values are passed
+
+- **Question:** CLI flags, optional config file, or both?
+- **Decision:** CLI flags with sensible defaults
+  (`--target-model SSF`, `--source-model SSF_SOURCE`,
+  `--dependency-type strict`).
+- **Why it matters:** CLI flags are visible in the run command —
+  trivial to grep CI logs for what values were used. A config
+  file would hide the defaults behind a second file the reader
+  has to also open.
+- **Rejected:**
+  - "Config file only" — hidden defaults.
+  - "Both" — extra moving parts for marginal gain at this stage.
+- **Reflected in code at:** `MovementConfig` dataclass + the
+  three `parser.add_argument` calls in `main()`.
+
+### D19. `target_table_name` derivation
+
+- **Question:** when the filename has no hyphen, what's the
+  `target_table_name`?
+- **Decision:** the full filename stem.
+- **Why it matters:** the hyphen-stripping rule is a customer-site
+  convention for a specific naming pattern
+  (`customer-revenue.sql` → table `customer`). For files that
+  don't follow that pattern, the full stem is the obvious
+  identifier. Falling back to `@mdde-entity` would break for
+  unannotated files.
+- **Rejected:**
+  - "Use @mdde-entity if present, else stem" — inconsistent.
+  - "Always require @mdde-entity" — breaks unannotated files.
+- **Reflected in code at:** `_target_table_name()`.
+
+### D20. Join-only source rows
+
+- **Question:** how to record dependencies on tables that are
+  joined but contribute no projection columns?
+- **Decision:** emit one row per join-only source with empty
+  `target_column_name` and `source_column_name`,
+  `derived_indicator = false`.
+- **Why it matters:** the dependency is real (the table is
+  required to run the query) but the column-level mapping is
+  empty. The empty-string row records the dependency without
+  inventing fictional column data.
+- **Rejected:**
+  - "Emit a row per JOIN-condition column" — would duplicate join
+    keys across many rows.
+  - "Skip join-only tables" — loses the dependency, the customer
+    wouldn't know which sources the query reads.
+- **Reflected in code at:** `emit_movement_csv_rows()`'s
+  `sources_with_projections` tracking + the trailing loop over
+  `pf.source_tables`.
+
+### D21. `derived_indicator` rule
+
+- **Question:** what counts as "derived"?
+- **Decision:** True if the lineage classifier returns anything
+  other than `direct` or `rename`. False for direct column refs
+  and pure renames.
+- **Why it matters:** the existing lineage classifier already
+  distinguishes `direct` / `rename` / `expression` / `aggregate`
+  / `constant`. Re-using it keeps the rule consistent with the
+  BFM mapping output and avoids a second source of truth.
+- **Rejected:**
+  - "Use the @derived annotation only" — strict but misses
+    derivations the analyst forgot to annotate.
+  - "Tag OR auto-detected" — most permissive, but the auto-detect
+    alone already catches everything the annotation would; the
+    OR adds no real signal.
+- **Reflected in code at:** `_is_derived_lineage()`.
+
+### D22. Where movement.csv is written
+
+- **Question:** per-query, run-level rollup, or both?
+- **Decision:** both — `<output>/<query>/movement.csv` per query
+  AND `<output>/movement.csv` rolling up all rows.
+- **Why it matters:** per-query slice matches the rest of the
+  per-query folder layout (D14). Run-level rollup matches the
+  customer's expected single-file import format. Cost is
+  near-zero (rendering is fast); having both is strictly
+  additive.
+- **Reflected in code at:** `emit_movement_csv()` (per-query) and
+  `emit_movement_csv_rollup()` (run-level), both called from
+  `process_folder()`.
+
+### D23. Unknown source column handling
+
+- **Question:** what to write in `source_column_name` when the
+  source is unknown (e.g., un-expanded `*`, unresolved
+  unqualified ref)?
+- **Decision:** empty string.
+- **Why it matters:** matches the join-only row convention
+  (D20). CSV parsers handle empty cells natively. A magic
+  `<unknown>` string would introduce a value the customer's
+  import tool would have to special-case.
+- **Reflected in code at:** `emit_movement_csv_rows()`'s
+  empty-source branch (when `lin.source_columns` is empty).
+
+### D24. CSV quoting style
+
+- **Question:** quote-minimal (only when needed) or quote-all?
+- **Decision:** quote-all — every cell is double-quoted.
+- **Why it matters:** the customer's import tool expects this
+  shape. Minimal quoting works for most CSV consumers but the
+  customer's specifically requires fully-quoted columns.
+- **Reflected in code at:** `_rows_to_csv()` uses
+  `csv.QUOTE_ALL`.
+
+### D25. `movement_expression` cleanup
+
+- **Decision** (made during implementation, no explicit question):
+  strip MDDE annotation block-comments and identifier quoting
+  before writing the SQL fragment into the CSV cell.
+- **Why it matters:**
+  - Annotation comments (`/* @pk @business_key */`) are noise in
+    a mapping CSV — they belong in the SQL file, not the export.
+  - Identifier quoting from `qualify()`
+    (`"c"."customer_id" AS "customer_id"`) is unreadable in a
+    spreadsheet cell.
+  - Stripping both produces a clean, paste-able fragment.
+- **Reflected in code at:** `_clean_movement_expression()`.
+
+---
+
+## Customer rule pack consolidation (15 rule pages → 8 numbered rules + sub-rules)
+
+### D26. Implementation aggression for the customer rule pack
+
+- **Question:** how aggressive should the implementation pass be — detection-only with selective auto-fix, all rules with auto-fix where tractable, or auto-fix everything including the hard cases?
+- **Decision:** detection-first. Auto-fix only for the low-risk shapes (schema replacement, obsolete-CTE removal, legacy date variable, comment header, CTE rename). Higher-risk transforms (FULL OUTER → UNION rewrite, scalar-subquery decorrelation, aggregation-step splitting) stay flagged-only.
+- **Why it matters:**
+  - 15 rule pages adds ~16 new detections at once. Shipping them all as findings is low risk and immediately useful (the report flags every gap).
+  - Auto-fix is incremental — each rewrite can land in its own PR once the detection has stabilised.
+  - Hard rewrites (FULL OUTER, decorrelation) have edge cases that aren't tractable without a cost model and good test coverage.
+- **Rejected:**
+  - "All auto-fix where tractable" — bigger first PR, harder to review.
+  - "Auto-fix everything including hard ones" — risk of producing wrong SQL on edge cases.
+- **Reflected in code at:** `_optimizer.py` (16 new detection functions); `sql_process.py`'s `apply_schema_replacement`, `apply_legacy_date_variable_replacement`, `remove_obsolete_ctes`.
+
+### D27. CTE naming convention
+
+- **Question:** keep the existing `<table>_proj` naming, rename to the customer's `<source>_filtered` convention, or make it configurable?
+- **Decision:** rename to match customer convention. `<table>_filtered` when a WHERE predicate is pushed, `<table>_prepared` when only projections are pushed (no filter).
+- **Why it matters:**
+  - Customer's "Naming of Initial CTEs for Filtering Source Tables" page is explicit: `<source_table>_filtered`.
+  - `_proj` was internal jargon nobody else recognises.
+  - `_prepared` fallback handles the "projection-only, no filter" case the customer doesn't have a name for.
+- **Reflected in code at:** `push_projections_to_source_ctes()` CTE-name generation block.
+
+### D28. Customer rule-pack documentation location
+
+- **Question:** where should the consolidated 8-rule pack live — new file, merged into RULES.md, or both?
+- **Decision:** new `CUSTOMER_RULES.md` mirroring the master page format. Existing `RULES.md` stays as internal per-detection reference. `DECISIONS.md` gets the per-decision rationale.
+- **Why it matters:**
+  - The customer's master page has a specific format (8 numbered rules, validation checklists, workflow) that's recognised by their team. Mirroring it makes the doc immediately reviewable.
+  - Our internal `RULES.md` is per-detection (rule type, severity, Genie mapping). Different audience, different structure.
+- **Reflected in code at:** new file `CUSTOMER_RULES.md`.
+
+### D29. Date variable default
+
+- **Question:** default to `{process_date}` (customer master pack), `{reporting_date}` (older pages), or require CLI?
+- **Decision:** default to `{process_date}`. Legacy `{reporting_date}` is auto-rewritten via `apply_legacy_date_variable_replacement`.
+- **Why it matters:**
+  - The customer's master "Restructured and AI Optimized Rule Set" is canonical; rule 2.2 explicitly normalises to `{process_date}`.
+  - Earlier rule pages use `{reporting_date}` because they predate the master pack. Auto-rewrite preserves backwards compat.
+- **Reflected in code at:** `CustomerRuleConfig.date_variable` default; `apply_legacy_date_variable_replacement()`.
+
+### D30. Schema replacement default
+
+- **Question:** on by default with the customer's `bodm/csz/hz/cz` blacklist, or off by default opt-in via CLI?
+- **Decision:** off by default. `--legacy-schemas` must be passed explicitly to activate.
+- **Why it matters:**
+  - The blacklist is the customer's specific data lake naming. Other users running the script shouldn't get those replacements unrequested.
+  - Off-by-default keeps the script generic; opt-in keeps the customer flow ergonomic.
+- **Reflected in code at:** `CustomerRuleConfig.legacy_schemas` defaults to empty list; rule fires only when non-empty.
+
+### D31. Comment header emission policy
+
+- **Question:** always emit, emit when ANY transform fired, or opt-in?
+- **Decision:** emit only when at least one transform actually fired. Skip on no-op runs.
+- **Why it matters:**
+  - A header that reports "no changes made" is noise.
+  - Already-compliant files get a clean output without spurious "Migration Details" banners.
+  - Emission is driven by `TransformLog` — each transform sets a flag, and the header is generated only when the log has anything in it.
+- **Reflected in code at:** `emit_comment_header()` returns empty string when no flags set; orchestrator's prepend is conditional on the header being non-empty.
+
+### D32. Per-rule auto-fix surface
+
+- **Decision** (implicit from D26):
+  - **Auto-fix** (5 rules): Schema Replacement (rule 1); Legacy Date Variable (rule 2.2); Obsolete CTE Removal (rule 3); `WHERE 1=1` removal (pre-existing); single-source projection pushdown (pre-existing, now renamed).
+  - **Detection-only** (everything else): BETWEEN-for-SCD2 (rule 2); Metadata Column Exposed (rule 4); Unused LEFT JOIN (rule 5); SELECT * (rule 6); PK dedup missing; DISTINCT without justification; UNION missing source tag; FULL OUTER with COALESCE; inline CAST/literal in JOIN; derivation in WHERE; inline transform in UNION; combined source filters; GROUP BY not isolated; non-descriptive CTE name.
+- **Why it matters:**
+  - The auto-fix list covers the rewrites that are mechanical (find → replace by name pattern) or already implemented.
+  - Everything detection-only is either a structural transform that needs design care or a stylistic finding the analyst should review.
+- **Reflected in code at:** the wiring in `apply_auto_fixes` (which transforms run) and the rule list in `_optimizer.get_all_check_types()`.
+
+### D33. `analyze_sql` parameter-bug fix
+
+- **Decision** (made during implementation, no explicit question): the existing call `lite_optimizer.analyze_sql(pf.raw_sql, pf.path.name)` was passing the filename as the `include_determinism` boolean. Fixed to pass `include_determinism=True` explicitly and added the new `config=` keyword.
+- **Why it matters:** `pf.path.name` is truthy for any non-empty string, so determinism checks always ran — but the call was semantically broken and would fail loudly the moment the signature changed. Fixed in this PR before adding the config parameter.
+- **Reflected in code at:** `run_quality_checks()`.

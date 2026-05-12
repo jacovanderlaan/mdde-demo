@@ -566,6 +566,137 @@
       "schemaURL": "https://openlineage.io/spec/2-0-2/OpenLineage.json#/definitions/RunEvent",
       "job": {
         "namespace": "mdde-demo.sql_process",
+        "name": "customer_subqueries"
+      },
+      "inputs": [
+        {
+          "namespace": "mdde-demo.sql_process",
+          "name": "stg_customers"
+        },
+        {
+          "namespace": "mdde-demo.sql_process",
+          "name": "raw_orders"
+        }
+      ],
+      "outputs": [
+        {
+          "namespace": "mdde-demo.sql_process",
+          "name": "customer_subqueries",
+          "facets": {
+            "schema": {
+              "fields": [
+                {
+                  "name": "customer_id",
+                  "type": "INFERRED"
+                },
+                {
+                  "name": "email",
+                  "type": "INFERRED"
+                },
+                {
+                  "name": "last_order_date",
+                  "type": "INFERRED"
+                },
+                {
+                  "name": "order_count",
+                  "type": "INFERRED"
+                },
+                {
+                  "name": "total_revenue",
+                  "type": "INFERRED"
+                },
+                {
+                  "name": "max_order_global",
+                  "type": "INFERRED"
+                },
+                {
+                  "name": "lifetime_order_count",
+                  "type": "INFERRED"
+                }
+              ]
+            },
+            "columnLineage": {
+              "fields": {
+                "customer_id": {
+                  "inputFields": [
+                    {
+                      "namespace": "mdde-demo.sql_process",
+                      "name": "c",
+                      "field": "customer_id"
+                    }
+                  ]
+                },
+                "email": {
+                  "inputFields": [
+                    {
+                      "namespace": "mdde-demo.sql_process",
+                      "name": "c",
+                      "field": "email"
+                    }
+                  ]
+                },
+                "last_order_date": {
+                  "inputFields": [
+                    {
+                      "namespace": "mdde-demo.sql_process",
+                      "name": "r",
+                      "field": "last_order_date"
+                    }
+                  ]
+                },
+                "order_count": {
+                  "inputFields": [
+                    {
+                      "namespace": "mdde-demo.sql_process",
+                      "name": "t",
+                      "field": "order_count"
+                    }
+                  ]
+                },
+                "total_revenue": {
+                  "inputFields": [
+                    {
+                      "namespace": "mdde-demo.sql_process",
+                      "name": "t",
+                      "field": "total_revenue"
+                    }
+                  ]
+                },
+                "max_order_global": {
+                  "inputFields": [
+                    {
+                      "namespace": "mdde-demo.sql_process",
+                      "name": "raw_orders",
+                      "field": "total_amount"
+                    }
+                  ]
+                },
+                "lifetime_order_count": {
+                  "inputFields": [
+                    {
+                      "namespace": "mdde-demo.sql_process",
+                      "name": "o",
+                      "field": "customer_id"
+                    },
+                    {
+                      "namespace": "mdde-demo.sql_process",
+                      "name": "c",
+                      "field": "customer_id"
+                    }
+                  ]
+                }
+              }
+            }
+          }
+        }
+      ]
+    },
+    {
+      "eventType": "COMPLETE",
+      "producer": "mdde-demo://examples/sql_process",
+      "schemaURL": "https://openlineage.io/spec/2-0-2/OpenLineage.json#/definitions/RunEvent",
+      "job": {
+        "namespace": "mdde-demo.sql_process",
         "name": "raw_customers"
       },
       "inputs": [
@@ -970,12 +1101,22 @@
         "via_table": "raw_orders"
       },
       {
+        "producer_job": "stg_customers",
+        "consumer_job": "customer_subqueries",
+        "via_table": "stg_customers"
+      },
+      {
+        "producer_job": "raw_orders",
+        "consumer_job": "customer_subqueries",
+        "via_table": "raw_orders"
+      },
+      {
         "producer_job": "raw_customers",
         "consumer_job": "stg_customers",
         "via_table": "raw_customers"
       }
     ],
     "namespace": "mdde-demo.sql_process",
-    "edge_count": 9
+    "edge_count": 11
   }
 }

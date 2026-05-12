@@ -435,19 +435,519 @@ def check_missing_group_by(parsed: exp.Expression) -> List[SQLDiagnostic]:
     return diagnostics
 
 
-def analyze_sql(sql_content: str, include_determinism: bool = True) -> List[SQLDiagnostic]:
+# ============================================================
+# CUSTOMER RULE-PACK CHECKS
+# ============================================================
+#
+# These detection rules implement the customer's consolidated SQL
+# migration rule set (see CUSTOMER_RULES.md). Each function follows
+# the convention: input a parsed AST + an optional config dict,
+# return a list of SQLDiagnostic.
+#
+# Config dict shape (all keys optional):
+#   {
+#     "legacy_schemas": ["bodm", "csz", "hz", "cz"],
+#     "replacement_schema": "automatically_inferred_qualifier",
+#     "date_variable": "process_date",
+#     "metadata_blacklist": [
+#       "snapshot_date", "insert_dts", "update_dts", "current_flag",
+#       "delete_flag", "delta_flag", "create_timestamp",
+#       "start_dts", "end_dts",
+#     ],
+#     "obsolete_cte_names": [
+#       "extract_dates", "create_timeline", "finalize_timeline",
+#     ],
+#   }
+
+
+_DEFAULT_METADATA_BLACKLIST = (
+    "snapshot_date",
+    "insert_dts",
+    "update_dts",
+    "current_flag",
+    "delete_flag",
+    "delta_flag",
+    "create_timestamp",
+    "start_dts",
+    "end_dts",
+)
+
+_DEFAULT_OBSOLETE_CTES = (
+    "extract_dates",
+    "create_timeline",
+    "finalize_timeline",
+)
+
+
+def check_legacy_schema(parsed: exp.Expression, config: dict) -> List[SQLDiagnostic]:
+    """Rule 1: legacy schema references (`bodm`, `csz`, `hz`, `cz`)
+    should be replaced with `automatically_inferred_qualifier`."""
+    diagnostics = []
+    legacy = set(config.get("legacy_schemas") or [])
+    if not legacy:
+        return diagnostics
+    replacement = config.get("replacement_schema", "automatically_inferred_qualifier")
+    for tbl in parsed.find_all(exp.Table):
+        db = tbl.args.get("db")
+        if db is not None and db.name in legacy:
+            diagnostics.append(SQLDiagnostic(
+                diagnostic_type="LEGACY_SCHEMA",
+                message=f"Legacy schema '{db.name}' should be replaced with '{replacement}'",
+                severity="warning",
+                suggestion=f"Replace '{db.name}.{tbl.name}' with '{replacement}.{tbl.name}'",
+            ))
+    return diagnostics
+
+
+def check_legacy_date_variable(sql_content: str, config: dict) -> List[SQLDiagnostic]:
+    """Rule 2: replace legacy `{reporting_date}` with `{process_date}`.
+
+    Operates on raw SQL because template variables aren't part of the
+    parsed AST (sqlglot treats `{reporting_date}` as an identifier or
+    error depending on context)."""
+    diagnostics = []
+    target = config.get("date_variable", "process_date")
+    legacy_variants = ("reporting_date",)
+    for legacy in legacy_variants:
+        if legacy == target:
+            continue
+        if "{" + legacy + "}" in sql_content:
+            diagnostics.append(SQLDiagnostic(
+                diagnostic_type="LEGACY_DATE_VARIABLE",
+                message=f"Legacy template variable '{{{legacy}}}' should be '{{{target}}}'",
+                severity="warning",
+                suggestion=f"Replace '{{{legacy}}}' with '{{{target}}}'",
+            ))
+    return diagnostics
+
+
+def check_between_for_scd2(parsed: exp.Expression) -> List[SQLDiagnostic]:
+    """Rule 2: `BETWEEN` must not be used for SCD2-style filtering.
+
+    Flags `WHERE x BETWEEN _valid_from AND _valid_to` patterns and the
+    legacy `snapshot_date BETWEEN start_dts AND end_dts` pattern."""
+    diagnostics = []
+    scd2_cols = {"_valid_from", "_valid_to", "start_dts", "end_dts"}
+    for between in parsed.find_all(exp.Between):
+        cols = [c.name for c in between.find_all(exp.Column)]
+        if any(c in scd2_cols for c in cols):
+            diagnostics.append(SQLDiagnostic(
+                diagnostic_type="BETWEEN_FOR_SCD2",
+                message="BETWEEN used for SCD2/snapshot-date filtering",
+                severity="warning",
+                suggestion=(
+                    "Use explicit >= _valid_from AND < COALESCE(_valid_to, ...) "
+                    "predicates instead of BETWEEN"
+                ),
+            ))
+    return diagnostics
+
+
+def check_obsolete_cte(parsed: exp.Expression, config: dict) -> List[SQLDiagnostic]:
+    """Rule 3: identify CTEs whose names match the obsolete-timeline
+    blacklist (`extract_dates`, `create_timeline`, `finalize_timeline`)."""
+    diagnostics = []
+    blacklist = set(config.get("obsolete_cte_names") or _DEFAULT_OBSOLETE_CTES)
+    for cte in parsed.find_all(exp.CTE):
+        name = cte.alias_or_name
+        if name in blacklist:
+            diagnostics.append(SQLDiagnostic(
+                diagnostic_type="OBSOLETE_CTE",
+                message=f"CTE '{name}' is obsolete under SCD2 filtering",
+                severity="warning",
+                suggestion="Remove this CTE; downstream queries should read directly from the SCD2-filtered source",
+            ))
+    return diagnostics
+
+
+def check_metadata_column_exposed(parsed: exp.Expression, config: dict) -> List[SQLDiagnostic]:
+    """Rule 4: metadata columns must not appear in CTE/final outputs.
+
+    Walks every Select's projections; flags any column whose name
+    matches the metadata blacklist when it appears as an output column
+    (not inside a WHERE predicate)."""
+    diagnostics = []
+    blacklist = set(config.get("metadata_blacklist") or _DEFAULT_METADATA_BLACKLIST)
+    for select in parsed.find_all(exp.Select):
+        for proj in select.expressions:
+            col_name = None
+            if isinstance(proj, exp.Column):
+                col_name = proj.name
+            elif isinstance(proj, exp.Alias):
+                col_name = proj.alias
+                # Also catch `metadata_col AS something` — the source
+                # is what's blacklisted.
+                inner = proj.this
+                if isinstance(inner, exp.Column) and inner.name in blacklist:
+                    diagnostics.append(SQLDiagnostic(
+                        diagnostic_type="METADATA_COLUMN_EXPOSED",
+                        message=f"Metadata column '{inner.name}' exposed in output (as '{col_name}')",
+                        severity="warning",
+                        suggestion=f"Remove '{inner.name}' from output; it should not propagate downstream",
+                    ))
+                    continue
+            if col_name and col_name in blacklist:
+                diagnostics.append(SQLDiagnostic(
+                    diagnostic_type="METADATA_COLUMN_EXPOSED",
+                    message=f"Metadata column '{col_name}' exposed in output",
+                    severity="warning",
+                    suggestion=f"Remove '{col_name}' from output; it should not propagate downstream",
+                ))
+    return diagnostics
+
+
+def check_unused_left_join(parsed: exp.Expression) -> List[SQLDiagnostic]:
+    """Rule 5: LEFT JOINs that contribute no columns to the SELECT
+    (and aren't used in downstream joins/filters) should be removed."""
+    diagnostics = []
+    select = parsed.find(exp.Select)
+    if select is None:
+        return diagnostics
+
+    for join in select.args.get("joins") or []:
+        side = (join.args.get("side") or "").upper()
+        if side != "LEFT":
+            continue
+        # Find the join's table alias.
+        join_target = join.this
+        if not isinstance(join_target, exp.Table):
+            continue
+        alias = join_target.alias or join_target.name
+        if not alias:
+            continue
+        # Check whether any Column anywhere in the outer Select (other
+        # than this Join's ON clause) qualifies with this alias.
+        contributes = False
+        for col in select.find_all(exp.Column):
+            if col.table == alias:
+                # Exclude refs that live inside the Join's own ON clause.
+                ancestor = col.parent
+                inside_this_join = False
+                while ancestor is not None:
+                    if ancestor is join:
+                        inside_this_join = True
+                        break
+                    ancestor = ancestor.parent
+                if not inside_this_join:
+                    contributes = True
+                    break
+        if not contributes:
+            diagnostics.append(SQLDiagnostic(
+                diagnostic_type="UNUSED_LEFT_JOIN",
+                message=f"LEFT JOIN to '{alias}' contributes no columns and may be removable",
+                severity="info",
+                suggestion="Verify the join is needed for filtering side-effects; if not, remove it",
+            ))
+    return diagnostics
+
+
+def check_inline_cast_in_join(parsed: exp.Expression) -> List[SQLDiagnostic]:
+    """Pre-Processed Joins rule: no inline CAST / function / literal
+    in JOIN ON conditions. Materialise transformed keys in CTEs."""
+    diagnostics = []
+    for join in parsed.find_all(exp.Join):
+        on = join.args.get("on")
+        if on is None:
+            continue
+        for cast in on.find_all(exp.Cast):
+            diagnostics.append(SQLDiagnostic(
+                diagnostic_type="INLINE_CAST_IN_JOIN",
+                message=f"Inline CAST in JOIN ON clause: {cast.sql()}",
+                severity="warning",
+                suggestion="Pre-compute the transformed column in a CTE, then join on the prepared column",
+            ))
+        # Inline literals in the ON-clause (other than NULL / TRUE / FALSE).
+        for lit in on.find_all(exp.Literal):
+            if lit.is_string or lit.is_int:
+                diagnostics.append(SQLDiagnostic(
+                    diagnostic_type="LITERAL_IN_JOIN",
+                    message=f"Literal in JOIN ON clause: {lit.sql()}",
+                    severity="info",
+                    suggestion="Move the literal into a CTE filter; join on prepared columns only",
+                ))
+                break  # one finding per join is enough
+    return diagnostics
+
+
+def check_derivation_in_where(parsed: exp.Expression) -> List[SQLDiagnostic]:
+    """Rule: pre-compute Boolean fields; WHERE should reference them,
+    not perform `IS NOT NULL` / `CAST` / function calls on raw columns."""
+    diagnostics = []
+    boolean_prefixes = ("is_", "has_")
+    boolean_suffixes = ("_flag",)
+    for where in parsed.find_all(exp.Where):
+        # Function calls applied to columns inside WHERE.
+        for func in where.find_all(exp.Func):
+            if any(isinstance(a, exp.Column) for a in func.args.values() if a is not None):
+                func_name = type(func).__name__.upper()
+                if func_name in ("AND", "OR", "NOT", "PAREN"):
+                    continue
+                diagnostics.append(SQLDiagnostic(
+                    diagnostic_type="DERIVATION_IN_WHERE",
+                    message=f"Function call ({func_name}) on column inside WHERE",
+                    severity="info",
+                    suggestion="Pre-compute as a Boolean column (e.g., is_valid, has_value) in the source CTE and reference it in WHERE",
+                ))
+                break
+        # `<col> IS NOT NULL` on a non-Boolean column.
+        for is_null in where.find_all(exp.Is):
+            col = is_null.this
+            if not isinstance(col, exp.Column):
+                continue
+            name = (col.name or "").lower()
+            if name.startswith(boolean_prefixes) or name.endswith(boolean_suffixes):
+                continue
+            diagnostics.append(SQLDiagnostic(
+                diagnostic_type="DERIVATION_IN_WHERE",
+                message=f"IS [NOT] NULL on raw column '{name}' inside WHERE",
+                severity="info",
+                suggestion=f"Pre-compute 'has_{name}' (or similar Boolean) in the source CTE",
+            ))
+            break  # one finding per where is enough
+    return diagnostics
+
+
+def check_inline_union_transform(parsed: exp.Expression) -> List[SQLDiagnostic]:
+    """Rule: UNION ALL must be 'pure' — only concatenate already-prepared
+    datasets. No casts, filters, or new expression columns inside the
+    UNION branches."""
+    diagnostics = []
+    for union in parsed.find_all(exp.Union):
+        for branch in (union.this, union.expression):
+            if branch is None:
+                continue
+            branch_select = branch if isinstance(branch, exp.Select) else branch.find(exp.Select)
+            if branch_select is None:
+                continue
+            # Any Cast / Func / non-bare-column projection?
+            for proj in branch_select.expressions:
+                if isinstance(proj, exp.Column) or isinstance(proj, exp.Star):
+                    continue
+                if isinstance(proj, exp.Alias):
+                    inner = proj.this
+                    if isinstance(inner, exp.Column) or isinstance(inner, exp.Literal):
+                        continue
+                # Anything else is a derivation inside the UNION branch.
+                diagnostics.append(SQLDiagnostic(
+                    diagnostic_type="INLINE_UNION_TRANSFORM",
+                    message=f"Transformation inside UNION ALL branch: {proj.sql()[:80]}",
+                    severity="warning",
+                    suggestion="Move transformations into per-source CTEs; UNION ALL should only concatenate prepared data",
+                ))
+                break
+            # Filter inside the branch?
+            if branch_select.args.get("where"):
+                diagnostics.append(SQLDiagnostic(
+                    diagnostic_type="INLINE_UNION_TRANSFORM",
+                    message="WHERE clause inside UNION ALL branch",
+                    severity="warning",
+                    suggestion="Move filtering into per-source CTEs before the UNION ALL",
+                ))
+    return diagnostics
+
+
+def check_combined_source_filters(parsed: exp.Expression) -> List[SQLDiagnostic]:
+    """Rule: filters for multiple sources must not be combined into a
+    single WHERE clause. Each source should be filtered in its own
+    initial CTE."""
+    diagnostics = []
+    for where in parsed.find_all(exp.Where):
+        # Collect the table aliases referenced inside this WHERE.
+        aliases = set()
+        for col in where.find_all(exp.Column):
+            if col.table:
+                aliases.add(col.table)
+        # Cross-table predicate from at least 2 distinct sources?
+        if len(aliases) >= 2:
+            diagnostics.append(SQLDiagnostic(
+                diagnostic_type="COMBINED_SOURCE_FILTERS",
+                message=f"WHERE clause references columns from {len(aliases)} sources ({', '.join(sorted(aliases))})",
+                severity="info",
+                suggestion="Split into per-source filters in initial CTEs; the outer WHERE should be empty or cross-source-join-only",
+            ))
+    return diagnostics
+
+
+def check_groupby_not_isolated(parsed: exp.Expression) -> List[SQLDiagnostic]:
+    """Rule: GROUP BY must be in its own dedicated CTE. A Select with
+    GROUP BY *and* a WHERE *and* joins is mixing concerns."""
+    diagnostics = []
+    for select in parsed.find_all(exp.Select):
+        if select.args.get("group") is None:
+            continue
+        has_where = select.args.get("where") is not None
+        has_joins = bool(select.args.get("joins"))
+        if has_where and has_joins:
+            diagnostics.append(SQLDiagnostic(
+                diagnostic_type="GROUPBY_NOT_ISOLATED",
+                message="GROUP BY combined with WHERE and JOINs in a single SELECT",
+                severity="info",
+                suggestion="Split into a filtered_data CTE (WHERE+joins) and an aggregated_data CTE (GROUP BY)",
+            ))
+    return diagnostics
+
+
+def check_distinct_without_justification(parsed: exp.Expression, sql_content: str) -> List[SQLDiagnostic]:
+    """Rule: every DISTINCT must be accompanied by a justifying comment
+    referencing the rule. Heuristic: look for keywords near the DISTINCT
+    in the raw SQL."""
+    diagnostics = []
+    has_distinct = False
+    for select in parsed.find_all(exp.Select):
+        if select.args.get("distinct"):
+            has_distinct = True
+            break
+    if not has_distinct:
+        return diagnostics
+    # Look for a comment justifying DISTINCT — any line containing
+    # "DISTINCT" along with one of: "justified", "unavoidable",
+    # "because", "due to", "necessary".
+    justifying = ("justified", "unavoidable", "because", "due to", "necessary")
+    found_comment = False
+    for line in sql_content.splitlines():
+        stripped = line.strip().lower()
+        if not stripped.startswith("--") and "/*" not in stripped:
+            continue
+        if "distinct" in stripped and any(k in stripped for k in justifying):
+            found_comment = True
+            break
+    if not found_comment:
+        diagnostics.append(SQLDiagnostic(
+            diagnostic_type="DISTINCT_WITHOUT_JUSTIFICATION",
+            message="DISTINCT used without a justifying comment",
+            severity="info",
+            suggestion=(
+                "Either replace DISTINCT with explicit deduplication "
+                "(ROW_NUMBER OVER PARTITION BY ...) or add a comment "
+                "explaining why DISTINCT is necessary"
+            ),
+        ))
+    return diagnostics
+
+
+def check_union_missing_source_tag(parsed: exp.Expression) -> List[SQLDiagnostic]:
+    """Rule: every UNION ALL branch must add a literal column tagging
+    the originating source (`'A_SOURCE' AS source_ind`, `'CRE' AS source`,
+    etc.). Detect by looking for at least one string-literal projection
+    per branch."""
+    diagnostics = []
+    for union in parsed.find_all(exp.Union):
+        for branch in (union.this, union.expression):
+            if branch is None:
+                continue
+            branch_select = branch if isinstance(branch, exp.Select) else branch.find(exp.Select)
+            if branch_select is None:
+                continue
+            has_literal_tag = False
+            for proj in branch_select.expressions:
+                inner = proj.this if isinstance(proj, exp.Alias) else proj
+                if isinstance(inner, exp.Literal) and inner.is_string:
+                    has_literal_tag = True
+                    break
+            if not has_literal_tag:
+                diagnostics.append(SQLDiagnostic(
+                    diagnostic_type="UNION_MISSING_SOURCE_TAG",
+                    message="UNION ALL branch lacks a source-identifying literal column",
+                    severity="info",
+                    suggestion="Add a literal column (e.g., 'CRE' AS source_ind) to identify the originating source",
+                ))
+    return diagnostics
+
+
+def check_full_outer_with_coalesce(parsed: exp.Expression) -> List[SQLDiagnostic]:
+    """Rule: replace FULL OUTER JOIN + COALESCE with three-CTE pattern
+    (LEFT JOIN/IS NULL × 2 + INNER JOIN, then UNION ALL)."""
+    diagnostics = []
+    for join in parsed.find_all(exp.Join):
+        side = (join.args.get("side") or "").upper()
+        kind = (join.args.get("kind") or "").upper()
+        if side == "FULL" or kind == "FULL":
+            # Find the outer Select; check whether its projection set
+            # uses COALESCE.
+            outer = join.parent
+            while outer is not None and not isinstance(outer, exp.Select):
+                outer = outer.parent
+            if outer is None:
+                continue
+            has_coalesce = any(outer.find_all(exp.Coalesce))
+            if has_coalesce:
+                diagnostics.append(SQLDiagnostic(
+                    diagnostic_type="FULL_OUTER_WITH_COALESCE",
+                    message="FULL OUTER JOIN with COALESCE — replace with LEFT JOIN/IS NULL + INNER JOIN + UNION ALL pattern",
+                    severity="warning",
+                    suggestion="Restructure as three CTEs: unique_rows_from_a, unique_rows_from_b, matching_rows; UNION ALL",
+                ))
+                break  # one finding per query
+    return diagnostics
+
+
+def check_non_descriptive_cte_name(parsed: exp.Expression) -> List[SQLDiagnostic]:
+    """Rule: CTE names should be descriptive (`filtered_*`, `*_filtered`,
+    `transformed_*`, etc.). Flag CTEs named `t1`, `cte1`, `tmp`, `a`,
+    `foo`, etc."""
+    diagnostics = []
+    bad_patterns = ("t1", "t2", "t3", "cte1", "cte2", "tmp", "temp", "foo", "bar", "a", "b", "c", "x", "y", "z")
+    for cte in parsed.find_all(exp.CTE):
+        name = (cte.alias_or_name or "").lower()
+        if name in bad_patterns:
+            diagnostics.append(SQLDiagnostic(
+                diagnostic_type="NON_DESCRIPTIVE_CTE_NAME",
+                message=f"CTE name '{cte.alias_or_name}' is not descriptive",
+                severity="info",
+                suggestion="Use descriptive names like <source>_filtered, transformed_data, aggregated_data, etc.",
+            ))
+    return diagnostics
+
+
+def check_pk_dedup_missing(
+    parsed: exp.Expression,
+    sql_content: str,
+) -> List[SQLDiagnostic]:
+    """Rule: when @pk annotations are present, the query should also
+    emit ROW_NUMBER + COUNT partitioned by the PK so downstream DQ
+    checks can verify uniqueness. Detection only."""
+    diagnostics = []
+    # Look for @pk annotations in the raw SQL.
+    if "@pk" not in sql_content:
+        return diagnostics
+    # If we have a ROW_NUMBER OVER (PARTITION BY ...) anywhere, assume
+    # the dedup check is in place. Heuristic; conservative.
+    has_partitioned_rownum = False
+    for window in parsed.find_all(exp.Window):
+        partition = window.args.get("partition_by")
+        if partition:
+            inner = window.this
+            if isinstance(inner, exp.RowNumber):
+                has_partitioned_rownum = True
+                break
+    if not has_partitioned_rownum:
+        diagnostics.append(SQLDiagnostic(
+            diagnostic_type="PK_DEDUP_CHECK_MISSING",
+            message="@pk annotations present but no ROW_NUMBER PARTITION BY <pk> for dedup verification",
+            severity="info",
+            suggestion=(
+                "Add `ROW_NUMBER() OVER (PARTITION BY <pk_cols> ORDER BY ...) AS _rn_per_pk` "
+                "and `COUNT(*) OVER (PARTITION BY <pk_cols>) AS _cnt_per_pk` so downstream "
+                "DQ checks can assert uniqueness"
+            ),
+        ))
+    return diagnostics
+
+
+def analyze_sql(
+    sql_content: str,
+    include_determinism: bool = True,
+    config: dict = None,
+) -> List[SQLDiagnostic]:
     """
     Run all checks on SQL content.
 
     Args:
         sql_content: SQL to analyze
         include_determinism: Whether to include determinism checks (default True)
+        config: Optional customer-rule config dict (see top of file)
 
     Returns list of diagnostics.
-
-    Related articles:
-    - "Implementing 25 Essential Data Quality Checks Using YAML Metadata"
-    - "Testing Query Migrations Using Synthetic Data"
     """
     try:
         parsed = sqlglot.parse_one(sql_content)
@@ -458,6 +958,7 @@ def analyze_sql(sql_content: str, include_determinism: bool = True) -> List[SQLD
             severity="error",
         )]
 
+    config = config or {}
     diagnostics = []
 
     # Original 5 checks
@@ -478,6 +979,24 @@ def analyze_sql(sql_content: str, include_determinism: bool = True) -> List[SQLD
     diagnostics.extend(check_or_in_join(parsed))
     diagnostics.extend(check_hardcoded_date(parsed))
     diagnostics.extend(check_missing_group_by(parsed))
+
+    # Customer rule-pack checks
+    diagnostics.extend(check_legacy_schema(parsed, config))
+    diagnostics.extend(check_legacy_date_variable(sql_content, config))
+    diagnostics.extend(check_between_for_scd2(parsed))
+    diagnostics.extend(check_obsolete_cte(parsed, config))
+    diagnostics.extend(check_metadata_column_exposed(parsed, config))
+    diagnostics.extend(check_unused_left_join(parsed))
+    diagnostics.extend(check_inline_cast_in_join(parsed))
+    diagnostics.extend(check_derivation_in_where(parsed))
+    diagnostics.extend(check_inline_union_transform(parsed))
+    diagnostics.extend(check_combined_source_filters(parsed))
+    diagnostics.extend(check_groupby_not_isolated(parsed))
+    diagnostics.extend(check_distinct_without_justification(parsed, sql_content))
+    diagnostics.extend(check_union_missing_source_tag(parsed))
+    diagnostics.extend(check_full_outer_with_coalesce(parsed))
+    diagnostics.extend(check_non_descriptive_cte_name(parsed))
+    diagnostics.extend(check_pk_dedup_missing(parsed, sql_content))
 
     # Determinism checks (critical for regression testing)
     if include_determinism:
@@ -512,6 +1031,24 @@ def get_all_check_types() -> List[str]:
         "OR_IN_JOIN",
         "HARDCODED_DATE",
         "MISSING_GROUP_BY",
+        # Customer rule-pack checks (16)
+        "LEGACY_SCHEMA",
+        "LEGACY_DATE_VARIABLE",
+        "BETWEEN_FOR_SCD2",
+        "OBSOLETE_CTE",
+        "METADATA_COLUMN_EXPOSED",
+        "UNUSED_LEFT_JOIN",
+        "INLINE_CAST_IN_JOIN",
+        "LITERAL_IN_JOIN",
+        "DERIVATION_IN_WHERE",
+        "INLINE_UNION_TRANSFORM",
+        "COMBINED_SOURCE_FILTERS",
+        "GROUPBY_NOT_ISOLATED",
+        "DISTINCT_WITHOUT_JUSTIFICATION",
+        "UNION_MISSING_SOURCE_TAG",
+        "FULL_OUTER_WITH_COALESCE",
+        "NON_DESCRIPTIVE_CTE_NAME",
+        "PK_DEDUP_CHECK_MISSING",
         # Determinism checks (5)
         "WINDOW_NO_ORDER",
         "WINDOW_NON_UNIQUE_ORDER",

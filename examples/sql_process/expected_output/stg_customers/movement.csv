@@ -1,0 +1,8 @@
+"target_model_name","target_table_name","target_column_name","source_model_name","source_table_name","source_column_name","derived_indicator","movement_expression","dependency_type"
+"SSF","stg_customers","customer_id","SSF_SOURCE","raw_customers","customer_id","true","CAST(raw_customers.customer_id AS BIGINT) AS customer_id","strict"
+"SSF","stg_customers","first_name","SSF_SOURCE","raw_customers","first_name","true","TRIM(raw_customers.first_name) AS first_name","strict"
+"SSF","stg_customers","last_name","SSF_SOURCE","raw_customers","last_name","true","TRIM(raw_customers.last_name) AS last_name","strict"
+"SSF","stg_customers","email","SSF_SOURCE","raw_customers","email","true","LOWER(TRIM(raw_customers.email)) AS email","strict"
+"SSF","stg_customers","phone","SSF_SOURCE","raw_customers","phone","true","NULLIF(TRIM(raw_customers.phone), '') AS phone","strict"
+"SSF","stg_customers","created_at","SSF_SOURCE","raw_customers","created_at","true","CAST(raw_customers.created_at AS TIMESTAMP) AS created_at","strict"
+"SSF","stg_customers","source_system","SSF_SOURCE","raw_customers","source_system","false","raw_customers.source_system AS source_system","strict"
