@@ -464,11 +464,68 @@ engine. Currently:
 
 - `WHERE 1=1 AND ...` → `WHERE ...`
 - **Subquery → CTE lifting** (see below)
-- **Single-table projection pushdown** (see below)
+- **Single-table projection pushdown** (renames + filters → source CTE; see below)
+- **Joined CTE extraction** (JOINs + multi-source derivations → `<entity>_joined`)
+- **Aggregation CTE extraction** (SUM/MAX/... + GROUP BY → `<entity>_aggregated`)
+- **UNION-branch lifting** (each branch → CTE; top-level is a pure UNION ALL)
+- **Passthrough-CTE rewrite** (`WITH x AS (SELECT * FROM real_table)` body mutated in place)
 - Format normalisation via `sqlglot.transpile(pretty=True)`
 
 `ROW_NUMBER()` without `ORDER BY` is **not** auto-fixed — we can't
 infer the right ordering key. Flagged as an error in the report.
+
+### Layer / concern model
+
+Each CTE in the optimised output has exactly one concern. A query
+flows through (some or all of) these layers, top to bottom:
+
+| Layer | CTE name pattern | What lives here |
+|---|---|---|
+| Source | `<table>_prepared` / `<table>_filtered` | Bare columns + renames + single-table filters |
+| Joined | `<entity>_joined` | JOIN(s) + multi-source derivations |
+| Aggregated | `<entity>_aggregated` | GROUP BY + aggregates only (no JOINs, no derivations) |
+| Branch CTEs | `<branch_tag>` or `<entity>_<n>` | Each UNION ALL branch lifted as a CTE |
+| Final SELECT | (no CTE — top level) | CAST + COALESCE + defaults + constants |
+
+Example end-to-end shape (see `expected_output/agg_customer_summary/optimized.sql`):
+
+```sql
+WITH
+  customer_prepared AS (
+    -- Source layer: renames only
+    SELECT customer_id, email, country FROM customer
+  ),
+  agg_customer_summary_joined AS (
+    -- Joined layer: JOIN + multi-source derivations
+    SELECT customer_id, email, country, amount, order_date
+    FROM customer_prepared c
+    LEFT JOIN orders o ON o.customer_id = c.customer_id
+  ),
+  agg_customer_summary_aggregated AS (
+    -- Aggregated layer: GROUP BY + aggregates over a single-table input
+    SELECT customer_id, email, country,
+           SUM(amount) AS amount_sum,
+           COUNT(*) AS agg_2,
+           MAX(order_date) AS order_date_max
+    FROM agg_customer_summary_joined
+    GROUP BY customer_id, email, country
+  )
+-- Final SELECT: formatting only (CAST, COALESCE, constants)
+SELECT
+  customer_id, email, country,
+  CAST(amount_sum AS DECIMAL(18, 2)) AS total_revenue,
+  agg_2 AS order_count,
+  order_date_max AS last_order_date,
+  COALESCE(country, 'unknown') AS country_clean,
+  'customer_summary' AS rollup_kind
+FROM agg_customer_summary_aggregated
+```
+
+See `expected_output/union_revenue_breakdown/optimized.sql` for the
+UNION-branch pattern and
+`expected_output/passthrough_with_loans/optimized.sql` for the
+passthrough-CTE rewrite. Layer/concern rule is documented in
+`DECISIONS.md` (D46–D49).
 
 ### Subquery → CTE lifting
 

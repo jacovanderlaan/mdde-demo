@@ -16,6 +16,53 @@ full context.
 
 ---
 
+## Layer / concern model
+
+Each CTE in the rewritten output has exactly one job. The layered
+pipeline maps SQL phases to CTE names. A query goes through (some
+or all of) the following layers, top to bottom:
+
+| Layer | CTE name pattern | Single concern |
+|---|---|---|
+| Source | `<table>_prepared` / `<table>_filtered` | SELECT columns + renames + single-table filters |
+| Joined | `<entity>_joined` | JOIN + multi-source derivations |
+| Filtered (planned) | `<entity>_filtered` | Cross-source WHERE predicates |
+| Aggregated | `<entity>_aggregated` | GROUP BY + aggregates only |
+| Unioned (implicit) | `<entity>_<n>` branch CTEs | UNION ALL of fully-prepared branches |
+| Final SELECT | (no CTE — top-level) | CAST + COALESCE + defaults + constants |
+
+**Implemented today:**
+- Source pushdown (with strict renames-only rule, plus passthrough-CTE
+  in-place rewrite).
+- Joined CTE for JOIN + multi-source derivations.
+- Aggregation CTE.
+- UNION-branch lifting.
+- Final SELECT for casting / defaulting / constants.
+
+**Planned (not yet implemented):**
+- Single-source value transforms (UPPER, TRIM, arithmetic over one
+  table) folded back INTO the source CTE.
+- Cross-source filtering CTE `<entity>_filtered` between joined and
+  aggregated.
+- Recursive layering inside UNION-branch CTEs (each branch gets the
+  full pipeline applied internally).
+
+### Why split into so many CTEs?
+
+Each layer answers exactly one question:
+- "What does this table expose?" → source CTE
+- "How do these tables relate?" → joined CTE
+- "What slice are we operating on?" → filtered CTE
+- "What's the aggregate signature?" → aggregated CTE
+- "How is the result formatted?" → final SELECT
+
+A reader can stop at the layer they care about. Lineage tools can
+attribute every column to a single CTE. The customer's existing
+DataForge convention (`_filtered`, `_prepared`) maps directly to
+the source layer and inspired the rest of the pattern.
+
+---
+
 ## Subquery → CTE lifting
 
 ### D1. Which subquery shapes to lift
@@ -633,3 +680,44 @@ full context.
 - **Decision:** Two new config keys, ``files.include`` and ``files.exclude``, both lists of pathlib-glob strings relative to the input dir. ``include`` non-empty restricts the set; ``exclude`` is applied after include.
 - **Why it matters:** Customer test runs often target a subset of their corpus (one folder, one naming pattern). Adding includes/excludes avoids the workaround of copying SQL files to a scratch input dir.
 - **Reflected in code at:** ``FileConfig`` dataclass; ``_select_input_files()`` helper in ``process_folder()``.
+
+### D46. Aggregation CTE (2026-05-12)
+
+- **Question:** Customer site has top-level SELECTs that mix aggregates (`SUM`, `MAX`, `COUNT`) with casts (`CAST(SUM(x) AS DECIMAL)`) and defaulting (`CASE WHEN ... ELSE 'unknown' END`). How should we split that?
+- **Decision:** When the outer SELECT has top-level aggregates AND any formatting projection (CAST/CASE/COALESCE/literal/function call), lift JOINs + aggregates + GROUP BY into `<entity>_aggregated`. Outer SELECT then applies casting/defaulting only.
+- **Why it matters:** keeping aggregation in its own CTE matches the customer's mental model: "compute the rollup once, then format". The two-step structure makes the SQL self-documenting and surfaces the GROUP BY keys at the layer that needs them.
+- **Carve-outs that DON'T trigger extraction:**
+  - Aggregates inside subqueries (`(SELECT MAX(x) FROM t)`) — separate SELECT scope.
+  - Aggregates inside `OVER (...)` clauses (windowed) — semantically window functions, not group aggregates.
+  - Top-level UNION ALL — handled separately.
+- **Reflected in code at:** `extract_aggregation_cte()` + `_expression_has_aggregate()` (scope-aware check).
+
+### D47. UNION-branch lifting (2026-05-12)
+
+- **Question:** Customer SQL chains 2+ UNION ALL branches; readers can't tell where one branch ends. How do we make it scannable?
+- **Decision:** Each top-level UNION ALL branch becomes its own CTE; top-level body is reduced to `SELECT * FROM cte_a UNION ALL SELECT * FROM cte_b ...`. Branch CTE names are inferred from a `'X' AS <tag>` string-literal projection inside the branch (snake-cased), with `<entity>_<n>` fallback.
+- **Scope limits:**
+  - UNION ALL only (UNION-distinct, INTERSECT, EXCEPT left alone).
+  - Skipped when every branch is already a bare `SELECT * FROM <name>`.
+  - Each branch is currently lifted as-is — recursive per-branch layering is planned, not implemented.
+- **Why it matters:** the customer's UNION-of-valuations files (loan_loss + carrying_amount + ...) become readable: each branch is a self-contained CTE with a meaningful name; the UNION body documents the composition without burying it under 200 lines of projection logic.
+- **Reflected in code at:** `extract_union_branches_to_ctes()` + `_walk_union_branches()` + `_infer_branch_name_from_literal()`.
+
+### D48. Joined CTE (`<entity>_joined`) (2026-05-12)
+
+- **Question:** Customer wants JOIN logic separated from aggregation, formatting, and source-table prep. Where does the JOIN live?
+- **Decision:** Whenever the outer SELECT has at least one JOIN, lift the FROM + JOINs + WHERE into `<entity>_joined`. Single-source value transforms (UPPER, TRIM, arithmetic) that aren't casts/defaults/constants are also folded in. Outer SELECT then reads from a single-table FROM.
+- **Why it matters:** the joined CTE answers "how do these tables relate" in one place. The downstream agg CTE (when present) just GROUP BYs over a single-table input — no JOIN logic mixed in. Matches the customer's stated rule: "each CTE has one concern."
+- **Aggregate-CTE interaction:** when both transforms fire, the agg CTE's FROM is the joined CTE — agg CTE has no JOINs of its own.
+- **Carve-outs:**
+  - Top-level UNION — handled separately.
+  - No JOINs in the outer SELECT — no joined CTE needed.
+- **Planned extension:** single-source derivations (UPPER, TRIM, arithmetic over one source) should fold INTO the source CTE rather than the joined CTE; today they live in the joined CTE. Multi-source derivations stay joined.
+- **Reflected in code at:** `extract_joined_cte()` + `_is_non_cast_derivation()`.
+
+### D49. Passthrough-CTE rewrite (2026-05-12)
+
+- **Question:** Customer's hand-rolled CTEs are sometimes thin wrappers: `WITH x AS (SELECT * FROM real_table)`. Should pushdown go INTO `x`'s body or add a sibling CTE?
+- **Decision:** When a CTE body is exactly `SELECT * FROM <real_table> [WHERE ...]` (no JOIN/GROUP/UNION/etc.), mutate the body in place — replace the `*` with the renames the outer SELECT actually uses, AND-merge new WHERE predicates into the existing one. CTEs with anything more complex stay untouched.
+- **Why it matters:** preserves the user's CTE name (which carries intent) and avoids the awkward `x` + `x_prepared` double-CTE for the same source.
+- **Reflected in code at:** `_passthrough_cte_target()` (shape detector) + the passthrough branch in `push_projections_to_source_ctes()`.

@@ -70,3 +70,33 @@ sources:
     phone: VARCHAR
     created_at: TIMESTAMP
     source_system: VARCHAR
+
+  # ------------------------------------------------------------------
+  # Source tables for the multi-layer pipeline fixtures
+  # (agg_customer_summary, union_revenue_breakdown, passthrough_with_loans).
+  # ------------------------------------------------------------------
+
+  raw.customer:
+    customer_id: BIGINT
+    first_name: VARCHAR
+    last_name: VARCHAR
+    email: VARCHAR
+    country: VARCHAR
+    created_at: TIMESTAMP
+
+  raw.orders:
+    order_id: BIGINT
+    customer_id: BIGINT
+    order_date: DATE
+    amount: DECIMAL
+    channel: VARCHAR
+    payment_method: VARCHAR
+
+  raw.loans:
+    loan_id: BIGINT
+    customer_id: BIGINT
+    product_code: VARCHAR
+    principal_amount: DECIMAL
+    interest_rate: DECIMAL
+    status: VARCHAR
+    opened_at: TIMESTAMP

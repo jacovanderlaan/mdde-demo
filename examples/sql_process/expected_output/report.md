@@ -1,27 +1,32 @@
 # sql_process — run report
 
-Files processed: **8**
+Files processed: **11**
 
 ## Files
 
 | File | Entity | Layer | Qualified | CTEs | Sources | Output cols | Quality issues |
 |---|---|---|---|---|---|---|---|
+| `agg_customer_summary.sql` | agg_customer_summary | business | yes | 0 | 2 | 8 | 2 |
 | `customer_latest_orders.sql` | customer_latest_orders | business | yes | 2 | 2 | 6 | 6 |
 | `customer_revenue.sql` | customer_revenue_clean | business | yes | 2 | 2 | 7 | 6 |
 | `customer_revenue_bad.sql` | customer_revenue | business | yes | 2 | 2 | 10 | 12 |
 | `customer_segment_analytics.sql` | customer_segment_analytics | business | yes | 3 | 2 | 10 | 10 |
 | `customer_subqueries.sql` | customer_subqueries | business | yes | 0 | 2 | 7 | 13 |
+| `passthrough_with_loans.sql` | passthrough_with_loans | business | yes | 2 | 2 | 6 | 6 |
 | `raw_customers.sql` | raw_customers | source | yes | 0 | 1 | 7 | 5 |
 | `raw_orders.sql` | raw_orders | source | yes | 0 | 1 | 7 | 4 |
 | `stg_customers.sql` | stg_customers | staging | yes | 0 | 1 | 7 | 5 |
+| `union_revenue_breakdown.sql` | union_revenue_breakdown | business | yes | 0 | 1 | 4 | 3 |
 
 ## Quality findings
 
-**Total:** 61 (error=3, warning=10, info=48)  
+**Total:** 72 (error=3, warning=15, info=54)  
 **Auto-fixed:** 1
 
 | File | Location | Rule | Severity | Auto-fixed | Message |
 |---|---|---|---|---|---|
+| `agg_customer_summary.sql` | <file> | SELECT_STAR | warning | no | SELECT * detected - explicit column list recommended |
+| `agg_customer_summary.sql` | <file> | MISSING_SOURCE_VERSION | info | no | Filename 'agg_customer_summary.sql' has fewer than 3 hyphen-separated parts; ... |
 | `customer_latest_orders.sql` | <file> | MISSING_ALIAS | info | no | Table 'customer_latest_orders' has no alias in multi-table query |
 | `customer_latest_orders.sql` | <file> | MISSING_ALIAS | info | no | Table 'raw_orders' has no alias in multi-table query |
 | `customer_latest_orders.sql` | <file> | MISSING_ALIAS | info | no | Table 'ordered_orders' has no alias in multi-table query |
@@ -69,6 +74,12 @@ Files processed: **8**
 | `customer_subqueries.sql` | <file> | MISSING_SOURCE_VERSION | info | no | Filename 'customer_subqueries.sql' has fewer than 3 hyphen-separated parts; m... |
 | `customer_subqueries.sql` | <predicate> | SUBQUERY_NOT_LIFTED | info | no | Subquery inside In left inline — lifting an IN/EXISTS/comparison subquery wou... |
 | `customer_subqueries.sql` | <correlated> | SUBQUERY_NOT_LIFTED | info | no | Correlated subquery left inline — references an outer scope that a CTE cannot... |
+| `passthrough_with_loans.sql` | <file> | SELECT_STAR | warning | no | SELECT * detected - explicit column list recommended |
+| `passthrough_with_loans.sql` | <file> | SELECT_STAR | warning | no | SELECT * detected - explicit column list recommended |
+| `passthrough_with_loans.sql` | <file> | MISSING_ALIAS | info | no | Table 'customer' has no alias in multi-table query |
+| `passthrough_with_loans.sql` | <file> | MISSING_ALIAS | info | no | Table 'loans' has no alias in multi-table query |
+| `passthrough_with_loans.sql` | <file> | DERIVATION_IN_WHERE | info | no | IS [NOT] NULL on raw column 'email' inside WHERE |
+| `passthrough_with_loans.sql` | <file> | MISSING_SOURCE_VERSION | info | no | Filename 'passthrough_with_loans.sql' has fewer than 3 hyphen-separated parts... |
 | `raw_customers.sql` | <file> | MISSING_ALIAS | info | no | Table 'raw_customers' has no alias in multi-table query |
 | `raw_customers.sql` | <file> | MISSING_ALIAS | info | no | Table 'crm_customers_export' has no alias in multi-table query |
 | `raw_customers.sql` | <file> | DERIVATION_IN_WHERE | info | no | IS [NOT] NULL on raw column '_ingested_at' inside WHERE |
@@ -83,10 +94,13 @@ Files processed: **8**
 | `stg_customers.sql` | <file> | DERIVATION_IN_WHERE | info | no | IS [NOT] NULL on raw column 'customer_id' inside WHERE |
 | `stg_customers.sql` | <file> | PK_DEDUP_CHECK_MISSING | info | no | @pk annotations present but no ROW_NUMBER PARTITION BY <pk> for dedup verific... |
 | `stg_customers.sql` | <file> | MISSING_SOURCE_VERSION | info | no | Filename 'stg_customers.sql' has fewer than 3 hyphen-separated parts; movemen... |
+| `union_revenue_breakdown.sql` | <file> | INLINE_UNION_TRANSFORM | warning | no | WHERE clause inside UNION ALL branch |
+| `union_revenue_breakdown.sql` | <file> | INLINE_UNION_TRANSFORM | warning | no | WHERE clause inside UNION ALL branch |
+| `union_revenue_breakdown.sql` | <file> | MISSING_SOURCE_VERSION | info | no | Filename 'union_revenue_breakdown.sql' has fewer than 3 hyphen-separated part... |
 
 ## Mapping coverage
 
-**61/61** output columns have a resolved source attribute (100%)
+**76/79** output columns have a resolved source attribute (96%)
 
 ## Cross-file lineage
 
@@ -116,11 +130,14 @@ flowchart LR
     stg_customers["stg_customers<br/><i>stg_customers.sql</i>"]
   end
   subgraph business
+    agg_customer_summary["agg_customer_summary<br/><i>agg_customer_summary.sql</i>"]
     customer_latest_orders["customer_latest_orders<br/><i>customer_latest_orders.sql</i>"]
     customer_revenue_clean["customer_revenue_clean<br/><i>customer_revenue.sql</i>"]
     customer_revenue["customer_revenue<br/><i>customer_revenue_bad.sql</i>"]
     customer_segment_analytics["customer_segment_analytics<br/><i>customer_segment_analytics.sql</i>"]
     customer_subqueries["customer_subqueries<br/><i>customer_subqueries.sql</i>"]
+    passthrough_with_loans["passthrough_with_loans<br/><i>passthrough_with_loans.sql</i>"]
+    union_revenue_breakdown["union_revenue_breakdown<br/><i>union_revenue_breakdown.sql</i>"]
   end
   raw_customers --> stg_customers
   raw_orders --> customer_latest_orders
@@ -136,20 +153,31 @@ flowchart LR
   subgraph external ["external sources"]
     ext_landing_crm_customers_export[("landing.crm_customers_export")]
     ext_landing_oms_orders_export[("landing.oms_orders_export")]
+    ext_raw_customer[("raw.customer")]
+    ext_raw_loans[("raw.loans")]
+    ext_raw_orders[("raw.orders")]
   end
   ext_landing_crm_customers_export --> raw_customers
   ext_landing_oms_orders_export --> raw_orders
+  ext_raw_customer --> agg_customer_summary
+  ext_raw_customer --> passthrough_with_loans
+  ext_raw_loans --> passthrough_with_loans
+  ext_raw_orders --> agg_customer_summary
+  ext_raw_orders --> union_revenue_breakdown
 ```
 
 ## SQL-First annotations
 
 | File | Entity | Annotated columns | Tags found |
 |---|---|---|---|
+| `agg_customer_summary.sql` | agg_customer_summary | 0 | — |
 | `customer_latest_orders.sql` | customer_latest_orders | 3 | derived, fk, pk |
 | `customer_revenue.sql` | customer_revenue_clean | 1 | pk |
 | `customer_revenue_bad.sql` | customer_revenue | 1 | pk |
 | `customer_segment_analytics.sql` | customer_segment_analytics | 1 | derived |
 | `customer_subqueries.sql` | customer_subqueries | 0 | — |
+| `passthrough_with_loans.sql` | passthrough_with_loans | 0 | — |
 | `raw_customers.sql` | raw_customers | 5 | business_key, nullable, pii, pk |
 | `raw_orders.sql` | raw_orders | 2 | business_key, fk, pk |
 | `stg_customers.sql` | stg_customers | 3 | business_key, pii, pk |
+| `union_revenue_breakdown.sql` | union_revenue_breakdown | 0 | — |

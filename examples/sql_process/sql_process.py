@@ -1511,6 +1511,301 @@ def _is_simple_column_named(node: exp.Expression, name: str) -> bool:
 
 
 # -----------------------------------------------------------------------------
+# Joined CTE extraction
+# -----------------------------------------------------------------------------
+#
+# When the outer SELECT has at least one JOIN, lift the JOIN(s) and
+# any non-cast single-source derivations into a dedicated
+# ``<entity>_joined`` CTE. The outer SELECT then reads from a single-
+# table FROM and no longer has any JOIN of its own — which lets the
+# aggregation CTE (next pass) just GROUP BY a single-table input
+# instead of carrying its own JOIN logic.
+#
+# Goal layering:
+#   <table>_prepared    sources, renames + filters    (existing pass)
+#   <entity>_joined     JOINs + non-cast derivations  (this pass)
+#   <entity>_aggregated joined input + SUM/MAX/...    (next pass)
+#   outer SELECT        CAST + CASE + COALESCE + literals
+#
+# When aggregation extraction also fires, the agg CTE reads FROM the
+# joined CTE (no JOIN clauses in the agg CTE — it just GROUP BYs the
+# joined output).
+#
+# Non-cast derivation examples (LIFTED into the joined CTE):
+#   - UPPER(c.first_name) AS first_name_clean
+#   - c.amount + c.tax AS total
+#   - SUBSTR(c.email, INSTR(c.email, '@') + 1) AS email_domain
+#   - c.quantity * c.unit_price AS line_total
+#
+# Excluded (these stay at the outer SELECT — formatting concerns):
+#   - CAST(...)
+#   - CASE WHEN ... END
+#   - COALESCE(...) / NULLIF(...) / IFNULL(...)
+#   - bare columns and ``column AS alias`` renames (already in sources)
+#   - literal projections (constants stay outer)
+
+
+_FORMATTING_FN_NAMES = frozenset({
+    "cast", "trycast", "try_cast", "convert",
+    "coalesce", "nullif", "ifnull", "nvl", "isnull",
+})
+
+
+def _is_non_cast_derivation(proj: exp.Expression) -> bool:
+    """True if ``proj`` is a value transform we want in the joined
+    CTE rather than the outer SELECT.
+
+    Rule: not a bare column/rename, not a literal/constant, no
+    CAST/CASE/COALESCE/NULLIF/IFNULL anywhere. Must contain at least
+    one Column reference (so it depends on data, not just literals).
+    Aggregates / windows / subqueries / stars stay outer.
+    """
+    if isinstance(proj, exp.Column):
+        return False
+    if isinstance(proj, exp.Alias):
+        inner = proj.this
+        if isinstance(inner, exp.Column):
+            return False
+        if isinstance(inner, exp.Literal):
+            return False
+    else:
+        inner = proj
+        if isinstance(inner, exp.Literal):
+            return False
+    if _expression_has_aggregate(proj):
+        return False
+    if any(proj.find_all(exp.Window)):
+        return False
+    if any(proj.find_all(exp.Subquery)):
+        return False
+    if any(proj.find_all(exp.Star)):
+        return False
+    if any(proj.find_all(exp.Cast)) or any(proj.find_all(exp.TryCast)):
+        return False
+    if any(proj.find_all(exp.Case)):
+        return False
+    if any(proj.find_all(exp.Coalesce)) or any(proj.find_all(exp.Nullif)):
+        return False
+    # Reject if any descendant function's name is in the formatting list.
+    for fn in proj.find_all(exp.Func):
+        name = (fn.key or "").lower()
+        if name in _FORMATTING_FN_NAMES:
+            return False
+    # Must reference at least one Column.
+    if not any(proj.find_all(exp.Column)):
+        return False
+    return True
+
+
+def extract_joined_cte(
+    sql: str,
+    findings: List[QualityFinding],
+    entity_hint: str,
+    log: "TransformLog",
+) -> Tuple[str, List[QualityFinding]]:
+    """Lift JOINs + non-cast single-source derivations into a
+    dedicated ``<entity>_joined`` CTE.
+
+    Fires when ALL of:
+      - The top-level SELECT has at least one JOIN.
+      - At least one projection is a non-cast derivation (see
+        ``_is_non_cast_derivation``).
+      - There is no UNION at the top level.
+
+    Strategy:
+      1. Build a new SELECT (the joined CTE body) that takes the
+         outer FROM + JOINs + WHERE, and projects:
+           - every bare column / rename / non-cast derivation from
+             the outer, with a stable column alias;
+           - every other source column the outer SELECT still
+             references (in casts, cases, coalesces, aggregates)
+             exposed as a bare column.
+      2. Outer SELECT then reads from a single-table FROM
+         (the joined CTE), with JOINs and WHERE moved into the CTE.
+         Bare/derivation projections become qualifier-less references
+         to the joined CTE's columns. Casts/cases/coalesces keep
+         their structure but reference joined CTE columns.
+
+    Safety: fail-soft on parse or analysis errors.
+    """
+    try:
+        statements = sqlglot.parse(sql, read=None)
+    except sqlglot.errors.ParseError:
+        return sql, findings
+    if not statements or statements[0] is None:
+        return sql, findings
+
+    root = statements[0]
+    if isinstance(root, exp.Create) and root.this:
+        target = root.expression or root.this
+    elif isinstance(root, exp.Query):
+        target = root
+    else:
+        target = root.find(exp.Select)
+    if not isinstance(target, exp.Select):
+        return sql, findings
+
+    # Skip top-level UNION.
+    if target.args.get("unions"):
+        return sql, findings
+    if isinstance(root, exp.Union):
+        return sql, findings
+
+    # Must have at least one JOIN. The joined CTE always fires when
+    # the outer SELECT has a multi-source FROM, even without any
+    # non-cast derivations — its purpose is also to hand the
+    # aggregation CTE a single-table input.
+    joins = target.args.get("joins") or []
+    if not joins:
+        return sql, findings
+
+    outer_projections = list(target.expressions)
+
+    cte_name = f"{entity_hint}_joined"
+
+    # Plan the joined CTE's projection list and the outer's replacement
+    # column references.
+    joined_projections: List[exp.Expression] = []
+    used_names: Set[str] = set()
+    # Map id(orig_outer_proj) -> output column name in joined CTE.
+    proj_to_joined_name: Dict[int, str] = {}
+
+    def _alloc_name(base: str) -> str:
+        name = base
+        n = 2
+        while name in used_names:
+            name = f"{base}_{n}"
+            n += 1
+        used_names.add(name)
+        return name
+
+    for proj in outer_projections:
+        # Bare column ``alias.col`` or ``col`` — joined CTE projects
+        # it (qualifier dropped) under the same name; outer reads
+        # the bare name.
+        if isinstance(proj, exp.Column):
+            col_name = proj.name
+            alloc = _alloc_name(col_name)
+            inner = exp.column(col_name)  # bare, no qualifier
+            joined_projections.append(
+                exp.alias_(inner, alloc) if alloc != col_name else inner
+            )
+            proj_to_joined_name[id(proj)] = alloc
+            continue
+        # ``alias.col AS out_name`` rename — joined CTE projects
+        # under ``out_name`` (renamed at this layer already).
+        if isinstance(proj, exp.Alias) and isinstance(proj.this, exp.Column):
+            inner_col = proj.this
+            out_name = proj.alias
+            alloc = _alloc_name(out_name)
+            joined_projections.append(
+                exp.alias_(exp.column(inner_col.name), alloc)
+                if alloc != inner_col.name else exp.column(inner_col.name)
+            )
+            proj_to_joined_name[id(proj)] = alloc
+            continue
+        # Non-cast derivation — joined CTE evaluates the expression
+        # under its alias (or a derived alias).
+        if _is_non_cast_derivation(proj):
+            if isinstance(proj, exp.Alias):
+                out_name = proj.alias
+                value = proj.this
+            else:
+                out_name = f"derived_{len(joined_projections) + 1}"
+                value = proj
+            alloc = _alloc_name(out_name)
+            joined_projections.append(exp.alias_(value.copy(), alloc))
+            proj_to_joined_name[id(proj)] = alloc
+            continue
+        # Everything else (CAST, CASE, COALESCE, aggregate, window,
+        # literal) stays at the outer SELECT. The joined CTE needs to
+        # expose any source columns these expressions reference, so
+        # the outer can find them by name.
+        for col in proj.find_all(exp.Column):
+            col_name = col.name
+            if col_name in used_names:
+                continue
+            joined_projections.append(exp.column(col_name))
+            used_names.add(col_name)
+
+    # Build the joined-CTE Select (FROM + JOINs + WHERE preserved).
+    joined_select = exp.Select(expressions=joined_projections)
+    from_clause = target.args.get("from_") or target.args.get("from")
+    if from_clause is not None:
+        joined_select.set("from_", from_clause.copy())
+    joined_select.set("joins", [j.copy() for j in joins])
+    where = target.args.get("where")
+    if where is not None:
+        joined_select.set("where", where.copy())
+
+    new_cte = exp.CTE(
+        this=joined_select,
+        alias=exp.TableAlias(this=exp.to_identifier(cte_name)),
+    )
+
+    # Rewrite the OUTER SELECT.
+    new_outer_projections: List[exp.Expression] = []
+    for proj in outer_projections:
+        joined_name = proj_to_joined_name.get(id(proj))
+        if joined_name is not None:
+            # Lifted into joined CTE — reference its output column.
+            original_alias = (
+                proj.alias if isinstance(proj, exp.Alias) else None
+            )
+            ref = exp.column(joined_name)
+            if original_alias and original_alias != joined_name:
+                ref = exp.alias_(ref, original_alias)
+            new_outer_projections.append(ref)
+            continue
+        # Kept at outer: strip qualifiers (single source = joined CTE).
+        proj_copy = proj.copy()
+        for col in proj_copy.find_all(exp.Column):
+            col.set("table", None)
+        new_outer_projections.append(proj_copy)
+
+    target.set("expressions", new_outer_projections)
+    target.set(
+        "from_",
+        exp.From(this=exp.Table(this=exp.to_identifier(cte_name))),
+    )
+    target.set("joins", None)
+    target.set("where", None)
+    # GROUP BY / HAVING that survived from the input still reference
+    # original source aliases (``c.customer_id``). After joined-CTE
+    # extraction the outer FROM is the joined CTE itself with no
+    # alias, so strip those qualifiers so the next agg-CTE pass sees
+    # consistent column references.
+    group = target.args.get("group")
+    if group is not None:
+        for col in group.find_all(exp.Column):
+            col.set("table", None)
+    having = target.args.get("having")
+    if having is not None:
+        for col in having.find_all(exp.Column):
+            col.set("table", None)
+
+    # Merge the new CTE into the WITH clause.
+    existing_with = target.args.get("with_")
+    if existing_with:
+        existing_with.set(
+            "expressions",
+            list(existing_with.expressions) + [new_cte],
+        )
+    else:
+        target.set("with_", exp.With(expressions=[new_cte], recursive=False))
+
+    log.joined_cte_extracted = True
+
+    try:
+        rendered = root.sql(pretty=True)
+        if sql.rstrip().endswith(";") and not rendered.rstrip().endswith(";"):
+            rendered = rendered.rstrip() + ";"
+        return rendered, findings
+    except Exception:  # noqa: BLE001 — fail-soft
+        return sql, findings
+
+
+# -----------------------------------------------------------------------------
 # Aggregation CTE extraction
 # -----------------------------------------------------------------------------
 #
@@ -1796,12 +2091,15 @@ def extract_aggregation_cte(
     target.set("where", None)
     target.set("group", None)
     target.set("having", None)
-    # Also strip any qualifiers on the outer column refs — at this
-    # level columns come from a single source (the agg CTE) with no
-    # alias, so leaving e.g., ``app.appraisal_amount_currency`` would
-    # be invalid.
-    for col in target.find_all(exp.Column):
-        col.set("table", None)
+    # Strip any remaining table qualifiers from the OUTER SELECT's
+    # projection list only — at this level columns come from a
+    # single source (the agg CTE) with no alias, so leaving e.g.,
+    # ``app.appraisal_amount_currency`` would be invalid. Critically,
+    # don't walk into CTE bodies attached via ``with_`` (they
+    # reference their own sources and aliases).
+    for proj in target.expressions:
+        for col in proj.find_all(exp.Column):
+            col.set("table", None)
 
     # Merge the new CTE into the WITH clause.
     new_cte = exp.CTE(
@@ -2113,6 +2411,7 @@ class TransformLog:
     qualifier_rewritten: bool = False
     metadata_columns_stripped: bool = False
     aggregation_cte_extracted: bool = False
+    joined_cte_extracted: bool = False
     union_branches_extracted: bool = False
     schema_replacements: List[Tuple[str, str]] = field(default_factory=list)
     obsolete_cte_names: List[str] = field(default_factory=list)
@@ -2556,6 +2855,13 @@ def emit_comment_header(
         )
         checklist.append("- [X] Modular CTE structure applied.")
 
+    if log.joined_cte_extracted:
+        summary.append(
+            "  - Lifted JOINs and single-source derivations into a "
+            "dedicated `_joined` CTE; outer SELECT reads from a single-table FROM."
+        )
+        checklist.append("- [X] JOIN isolated into joined CTE.")
+
     if log.aggregation_cte_extracted:
         summary.append(
             "  - Lifted aggregates and GROUP BY into a dedicated "
@@ -2684,10 +2990,18 @@ def apply_auto_fixes(
         if out != before:
             log.projections_pushed = True
 
+        # Lift JOINs + non-cast single-source derivations into a
+        # dedicated ``<entity>_joined`` CTE. Runs BEFORE aggregation
+        # extraction so the agg CTE just groups over a single-table
+        # input.
+        before = out
+        out, findings = extract_joined_cte(out, findings, entity_hint, log)
+        if out != before:
+            log.joined_cte_extracted = True
+
         # Lift aggregates + GROUP BY into a dedicated ``<entity>_aggregated``
         # CTE so the outer SELECT only applies casting / defaulting.
-        # Runs AFTER projection pushdown so the source CTEs are in
-        # place; the agg CTE references those CTE aliases.
+        # Runs AFTER projection pushdown + joined-CTE extraction.
         before = out
         out, findings = extract_aggregation_cte(out, findings, entity_hint, log)
         if out != before:
