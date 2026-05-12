@@ -1,6 +1,6 @@
 # sql_process — run report
 
-Files processed: **13**
+Files processed: **16**
 
 ## Files
 
@@ -13,16 +13,19 @@ Files processed: **13**
 | `customer_segment_analytics.sql` | customer_segment_analytics | business | yes | 3 | 2 | 10 | 10 |
 | `customer_subqueries.sql` | customer_subqueries | business | yes | 0 | 2 | 7 | 12 |
 | `except_subscribed_customers.sql` | except_subscribed_customers | business | yes | 0 | 2 | 2 | 2 |
+| `filtered_high_value.sql` | filtered_high_value | business | yes | 0 | 2 | 4 | 2 |
 | `passthrough_with_loans.sql` | passthrough_with_loans | business | yes | 2 | 2 | 6 | 6 |
 | `predicate_subqueries.sql` | predicate_subqueries | business | yes | 0 | 3 | 3 | 3 |
 | `raw_customers.sql` | raw_customers | source | yes | 0 | 1 | 7 | 5 |
 | `raw_orders.sql` | raw_orders | source | yes | 0 | 1 | 7 | 4 |
+| `source_derivations.sql` | source_derivations | business | yes | 0 | 2 | 13 | 1 |
 | `stg_customers.sql` | stg_customers | staging | yes | 0 | 1 | 7 | 5 |
 | `union_revenue_breakdown.sql` | union_revenue_breakdown | business | yes | 0 | 1 | 4 | 3 |
+| `union_with_layering.sql` | union_with_layering | business | yes | 0 | 2 | 4 | 9 |
 
 ## Quality findings
 
-**Total:** 76 (error=3, warning=15, info=58)  
+**Total:** 88 (error=3, warning=21, info=64)  
 **Auto-fixed:** 1
 
 | File | Location | Rule | Severity | Auto-fixed | Message |
@@ -77,6 +80,8 @@ Files processed: **13**
 | `customer_subqueries.sql` | <correlated> | SUBQUERY_NOT_LIFTED | info | no | Correlated subquery in FROM/SELECT position left inline — lifting would orpha... |
 | `except_subscribed_customers.sql` | <file> | DERIVATION_IN_WHERE | info | no | IS [NOT] NULL on raw column 'email' inside WHERE |
 | `except_subscribed_customers.sql` | <file> | MISSING_SOURCE_VERSION | info | no | Filename 'except_subscribed_customers.sql' has fewer than 3 hyphen-separated ... |
+| `filtered_high_value.sql` | <file> | COMBINED_SOURCE_FILTERS | info | no | WHERE clause references columns from 2 sources (c, o) |
+| `filtered_high_value.sql` | <file> | MISSING_SOURCE_VERSION | info | no | Filename 'filtered_high_value.sql' has fewer than 3 hyphen-separated parts; m... |
 | `passthrough_with_loans.sql` | <file> | SELECT_STAR | warning | no | SELECT * detected - explicit column list recommended |
 | `passthrough_with_loans.sql` | <file> | SELECT_STAR | warning | no | SELECT * detected - explicit column list recommended |
 | `passthrough_with_loans.sql` | <file> | MISSING_ALIAS | info | no | Table 'customer' has no alias in multi-table query |
@@ -95,6 +100,7 @@ Files processed: **13**
 | `raw_orders.sql` | <file> | MISSING_ALIAS | info | no | Table 'oms_orders_export' has no alias in multi-table query |
 | `raw_orders.sql` | <file> | PK_DEDUP_CHECK_MISSING | info | no | @pk annotations present but no ROW_NUMBER PARTITION BY <pk> for dedup verific... |
 | `raw_orders.sql` | <file> | MISSING_SOURCE_VERSION | info | no | Filename 'raw_orders.sql' has fewer than 3 hyphen-separated parts; movement.c... |
+| `source_derivations.sql` | <file> | MISSING_SOURCE_VERSION | info | no | Filename 'source_derivations.sql' has fewer than 3 hyphen-separated parts; mo... |
 | `stg_customers.sql` | <file> | MISSING_ALIAS | info | no | Table 'stg_customers' has no alias in multi-table query |
 | `stg_customers.sql` | <file> | MISSING_ALIAS | info | no | Table 'raw_customers' has no alias in multi-table query |
 | `stg_customers.sql` | <file> | DERIVATION_IN_WHERE | info | no | IS [NOT] NULL on raw column 'customer_id' inside WHERE |
@@ -103,10 +109,19 @@ Files processed: **13**
 | `union_revenue_breakdown.sql` | <file> | INLINE_UNION_TRANSFORM | warning | no | WHERE clause inside UNION ALL branch |
 | `union_revenue_breakdown.sql` | <file> | INLINE_UNION_TRANSFORM | warning | no | WHERE clause inside UNION ALL branch |
 | `union_revenue_breakdown.sql` | <file> | MISSING_SOURCE_VERSION | info | no | Filename 'union_revenue_breakdown.sql' has fewer than 3 hyphen-separated part... |
+| `union_with_layering.sql` | <file> | SELECT_STAR | warning | no | SELECT * detected - explicit column list recommended |
+| `union_with_layering.sql` | <file> | SELECT_STAR | warning | no | SELECT * detected - explicit column list recommended |
+| `union_with_layering.sql` | <file> | INLINE_UNION_TRANSFORM | warning | no | Transformation inside UNION ALL branch: CAST(SUM(o.amount) AS DECIMAL(18, 2))... |
+| `union_with_layering.sql` | <file> | INLINE_UNION_TRANSFORM | warning | no | WHERE clause inside UNION ALL branch |
+| `union_with_layering.sql` | <file> | INLINE_UNION_TRANSFORM | warning | no | Transformation inside UNION ALL branch: CAST(SUM(o.amount) AS DECIMAL(18, 2))... |
+| `union_with_layering.sql` | <file> | INLINE_UNION_TRANSFORM | warning | no | WHERE clause inside UNION ALL branch |
+| `union_with_layering.sql` | <file> | GROUPBY_NOT_ISOLATED | info | no | GROUP BY combined with WHERE and JOINs in a single SELECT |
+| `union_with_layering.sql` | <file> | GROUPBY_NOT_ISOLATED | info | no | GROUP BY combined with WHERE and JOINs in a single SELECT |
+| `union_with_layering.sql` | <file> | MISSING_SOURCE_VERSION | info | no | Filename 'union_with_layering.sql' has fewer than 3 hyphen-separated parts; m... |
 
 ## Mapping coverage
 
-**81/84** output columns have a resolved source attribute (96%)
+**99/105** output columns have a resolved source attribute (94%)
 
 ## Cross-file lineage
 
@@ -143,9 +158,12 @@ flowchart LR
     customer_segment_analytics["customer_segment_analytics<br/><i>customer_segment_analytics.sql</i>"]
     customer_subqueries["customer_subqueries<br/><i>customer_subqueries.sql</i>"]
     except_subscribed_customers["except_subscribed_customers<br/><i>except_subscribed_customers.sql</i>"]
+    filtered_high_value["filtered_high_value<br/><i>filtered_high_value.sql</i>"]
     passthrough_with_loans["passthrough_with_loans<br/><i>passthrough_with_loans.sql</i>"]
     predicate_subqueries["predicate_subqueries<br/><i>predicate_subqueries.sql</i>"]
+    source_derivations["source_derivations<br/><i>source_derivations.sql</i>"]
     union_revenue_breakdown["union_revenue_breakdown<br/><i>union_revenue_breakdown.sql</i>"]
+    union_with_layering["union_with_layering<br/><i>union_with_layering.sql</i>"]
   end
   raw_customers --> stg_customers
   raw_orders --> customer_latest_orders
@@ -169,14 +187,20 @@ flowchart LR
   ext_landing_oms_orders_export --> raw_orders
   ext_raw_customer --> agg_customer_summary
   ext_raw_customer --> except_subscribed_customers
+  ext_raw_customer --> filtered_high_value
   ext_raw_customer --> passthrough_with_loans
   ext_raw_customer --> predicate_subqueries
+  ext_raw_customer --> source_derivations
+  ext_raw_customer --> union_with_layering
   ext_raw_loans --> passthrough_with_loans
   ext_raw_loans --> predicate_subqueries
   ext_raw_orders --> agg_customer_summary
   ext_raw_orders --> except_subscribed_customers
+  ext_raw_orders --> filtered_high_value
   ext_raw_orders --> predicate_subqueries
+  ext_raw_orders --> source_derivations
   ext_raw_orders --> union_revenue_breakdown
+  ext_raw_orders --> union_with_layering
 ```
 
 ## SQL-First annotations
@@ -190,9 +214,12 @@ flowchart LR
 | `customer_segment_analytics.sql` | customer_segment_analytics | 1 | derived |
 | `customer_subqueries.sql` | customer_subqueries | 0 | — |
 | `except_subscribed_customers.sql` | except_subscribed_customers | 0 | — |
+| `filtered_high_value.sql` | filtered_high_value | 0 | — |
 | `passthrough_with_loans.sql` | passthrough_with_loans | 0 | — |
 | `predicate_subqueries.sql` | predicate_subqueries | 0 | — |
 | `raw_customers.sql` | raw_customers | 5 | business_key, nullable, pii, pk |
 | `raw_orders.sql` | raw_orders | 2 | business_key, fk, pk |
+| `source_derivations.sql` | source_derivations | 0 | — |
 | `stg_customers.sql` | stg_customers | 3 | business_key, pii, pk |
 | `union_revenue_breakdown.sql` | union_revenue_breakdown | 0 | — |
+| `union_with_layering.sql` | union_with_layering | 0 | — |

@@ -1353,35 +1353,67 @@ def _expression_uses_only(
 
 
 def _is_pushable_projection(proj: exp.Expression) -> bool:
-    """True if a projection is the kind we push into a source CTE.
+    """True if a projection MIGHT belong in a source CTE.
 
-    Strict rule: ONLY bare columns and pure renames belong in source
-    CTEs. Anything that transforms the value — CAST, CASE, COALESCE,
-    arithmetic, function calls, constants — stays at the outer SELECT.
+    Rule (2026-05-12 revised): allow bare columns, renames, AND
+    non-cast value transforms (UPPER, TRIM, arithmetic, etc.) — the
+    caller still needs to verify single-source ownership before
+    actually pushing. Reject anything that's an aggregate, window,
+    subquery, ``*``, CAST/TRY_CAST, CASE, COALESCE/NULLIF/IFNULL/NVL,
+    or a pure literal (constants don't depend on any source).
 
-    Rationale: the source CTE is a "what does this table expose"
-    layer (renames included so downstream code uses the target
-    vocabulary). Casting and defaulting are formatting concerns that
-    belong with the final join/result so a reader sees them together
-    in one place.
+    Rationale: the source CTE owns ALL single-table work — bare
+    columns, renames, and value transforms (`UPPER(c.email)`,
+    `c.amount + c.tax`, `SUBSTRING(c.addr, 1, 5)`). Casting and
+    defaulting still stay outer (they're formatting concerns).
+    Multi-source derivations stay in the joined CTE.
 
-    Pushable:
-      - ``c.foo``                (bare column)
-      - ``c.foo AS bar``         (pure rename of one column)
+    Pushable (subject to single-source ownership check downstream):
+      - ``c.foo``                       (bare column)
+      - ``c.foo AS bar``                (pure rename)
+      - ``UPPER(c.email) AS clean``     (single-source transform)
+      - ``c.x + c.tax AS total``        (single-source arithmetic)
+      - ``SUBSTRING(c.addr, 1, 5)``     (single-source function)
 
-    Not pushable (stays at outer SELECT):
+    Not pushable (stays at outer SELECT, or in joined CTE if
+    multi-source):
       - ``CAST(c.foo AS x)``                          (cast)
       - ``CASE WHEN c.flag = 'Y' THEN TRUE ... END``  (case / default)
       - ``COALESCE(c.foo, c.bar)``                    (default)
-      - ``UPPER(c.foo)``                              (transform)
-      - ``c.x + c.y`` / ``c.x * (-1)``                (arithmetic)
       - ``'literal' AS valuation_type`` / ``1 AS qty`` (constants)
+      - ``SUM(c.x)`` / ``ROW_NUMBER() OVER (...)``    (agg / window)
     """
     if isinstance(proj, exp.Column):
         return True
     if isinstance(proj, exp.Alias) and isinstance(proj.this, exp.Column):
         return True
-    return False
+    # Disqualify formatting / non-source-CTE shapes.
+    if _expression_has_aggregate(proj):
+        return False
+    if any(proj.find_all(exp.Window)):
+        return False
+    if any(proj.find_all(exp.Subquery)):
+        return False
+    if any(proj.find_all(exp.Star)):
+        return False
+    if any(proj.find_all(exp.Cast)) or any(proj.find_all(exp.TryCast)):
+        return False
+    if any(proj.find_all(exp.Case)):
+        return False
+    if any(proj.find_all(exp.Coalesce)) or any(proj.find_all(exp.Nullif)):
+        return False
+    for fn in proj.find_all(exp.Func):
+        name = (fn.key or "").lower()
+        if name in _FORMATTING_FN_NAMES:
+            return False
+    # Pure literal projection (no Column refs anywhere) — stays outer.
+    if isinstance(proj, exp.Literal):
+        return False
+    if isinstance(proj, exp.Alias) and isinstance(proj.this, exp.Literal):
+        return False
+    if not any(proj.find_all(exp.Column)):
+        return False
+    return True
 
 
 def _split_and(predicate: exp.Expression) -> List[exp.Expression]:
@@ -2029,13 +2061,24 @@ def extract_joined_cte(
             joined_projections.append(exp.column(col_name))
             used_names.add(col_name)
 
+    # Also expose any source columns referenced in the outer WHERE so
+    # the joined CTE's body (and a downstream filtered CTE that reads
+    # from the joined CTE) can resolve them.
+    where = target.args.get("where")
+    if where is not None:
+        for col in where.find_all(exp.Column):
+            col_name = col.name
+            if col_name in used_names:
+                continue
+            joined_projections.append(exp.column(col_name))
+            used_names.add(col_name)
+
     # Build the joined-CTE Select (FROM + JOINs + WHERE preserved).
     joined_select = exp.Select(expressions=joined_projections)
     from_clause = target.args.get("from_") or target.args.get("from")
     if from_clause is not None:
         joined_select.set("from_", from_clause.copy())
     joined_select.set("joins", [j.copy() for j in joins])
-    where = target.args.get("where")
     if where is not None:
         joined_select.set("where", where.copy())
 
@@ -2175,6 +2218,146 @@ def _strip_outer_alias_and_qualifiers(
     # via their source CTE aliases. This is a placeholder helper for
     # future per-layer flattening.
     return node.copy()
+
+
+# -----------------------------------------------------------------------------
+# Filtered CTE extraction
+# -----------------------------------------------------------------------------
+#
+# When the joined CTE was created and inherited a WHERE clause (cross-
+# source predicates that couldn't be pushed into source CTEs), move
+# that WHERE into a separate ``<entity>_filtered`` CTE so each CTE
+# stays single-concern:
+#
+#   <entity>_joined    JOIN + multi-source derivations    (no WHERE)
+#   <entity>_filtered  WHERE filters over joined output   (this pass)
+#   <entity>_aggregated GROUP BY + aggregates             (next pass)
+#
+# Skipped when:
+#   - No joined CTE exists.
+#   - Joined CTE has no WHERE clause to lift.
+
+
+def extract_filtered_cte(
+    sql: str,
+    findings: List[QualityFinding],
+    entity_hint: str,
+    log: "TransformLog",
+) -> Tuple[str, List[QualityFinding]]:
+    """Lift the joined CTE's WHERE into a dedicated
+    ``<entity>_filtered`` CTE. The outer SELECT (or whatever currently
+    reads from ``<entity>_joined``) gets repointed to the new filtered
+    CTE; joined CTE keeps only JOIN + derivation work.
+
+    Fires when ALL of:
+      - A ``<entity>_joined`` CTE exists in this file's WITH.
+      - That joined CTE has a non-empty WHERE clause.
+
+    Safety: fail-soft on parse / analysis errors.
+    """
+    try:
+        statements = sqlglot.parse(sql, read=None)
+    except sqlglot.errors.ParseError:
+        return sql, findings
+    if not statements or statements[0] is None:
+        return sql, findings
+
+    root = statements[0]
+    if isinstance(root, exp.Create) and root.this:
+        target = root.expression or root.this
+    elif isinstance(root, exp.Query):
+        target = root
+    else:
+        target = root.find(exp.Select)
+    if target is None:
+        return sql, findings
+
+    existing_with = target.args.get("with_")
+    if existing_with is None:
+        return sql, findings
+
+    # Find <entity>_joined.
+    joined_cte_name = f"{entity_hint}_joined"
+    joined_cte: Optional[exp.CTE] = None
+    joined_idx: Optional[int] = None
+    for i, cte in enumerate(existing_with.expressions):
+        if cte.alias_or_name == joined_cte_name:
+            joined_cte = cte
+            joined_idx = i
+            break
+    if joined_cte is None:
+        return sql, findings
+
+    inner = joined_cte.this
+    if not isinstance(inner, exp.Select):
+        return sql, findings
+    where = inner.args.get("where")
+    if where is None:
+        return sql, findings
+
+    # Build the filtered CTE: SELECT * FROM <joined_cte> WHERE <where>.
+    filtered_cte_name = f"{entity_hint}_filtered"
+    counter = 2
+    used_names = {c.alias_or_name for c in existing_with.expressions}
+    while filtered_cte_name in used_names:
+        filtered_cte_name = f"{entity_hint}_filtered_{counter}"
+        counter += 1
+
+    # Strip the qualifiers from columns in the moved WHERE. They
+    # originally pointed at source-CTE aliases (``c.country`` /
+    # ``o.payment_method``); after moving the WHERE into the filtered
+    # CTE — which reads from the joined CTE with no alias — those
+    # qualifiers don't resolve. The joined CTE projects these columns
+    # unqualified.
+    where_copy = where.copy()
+    for col in where_copy.find_all(exp.Column):
+        col.set("table", None)
+
+    filtered_select = exp.Select(expressions=[exp.Star()]).from_(
+        exp.Table(this=exp.to_identifier(joined_cte_name))
+    )
+    filtered_select.set("where", where_copy)
+    filtered_cte = exp.CTE(
+        this=filtered_select,
+        alias=exp.TableAlias(this=exp.to_identifier(filtered_cte_name)),
+    )
+
+    # Strip the WHERE from the joined CTE — it now lives in filtered.
+    inner.set("where", None)
+
+    # Insert filtered CTE right after joined CTE.
+    new_ctes = list(existing_with.expressions)
+    new_ctes.insert(joined_idx + 1, filtered_cte)
+    existing_with.set("expressions", new_ctes)
+
+    # Repoint everything that was reading from <entity>_joined to read
+    # from <entity>_filtered instead. That's the outer SELECT's FROM
+    # (and possibly later-defined CTE bodies, though those are unusual).
+    def _repoint(node: exp.Expression) -> None:
+        for tbl in node.find_all(exp.Table):
+            if tbl.name == joined_cte_name and not tbl.args.get("db") and not tbl.args.get("catalog"):
+                tbl.set("this", exp.to_identifier(filtered_cte_name))
+
+    # Repoint outer SELECT's FROM / JOINs.
+    from_clause = target.args.get("from_") or target.args.get("from")
+    if from_clause is not None:
+        _repoint(from_clause)
+    for join in target.args.get("joins") or []:
+        _repoint(join)
+    # Repoint any LATER CTE body that references the joined CTE. (Earlier
+    # CTEs can't see it; the joined CTE itself shouldn't reference itself.)
+    for cte in existing_with.expressions[joined_idx + 2:]:
+        _repoint(cte.this)
+
+    log.filtered_cte_extracted = True
+
+    try:
+        rendered = root.sql(pretty=True)
+        if sql.rstrip().endswith(";") and not rendered.rstrip().endswith(";"):
+            rendered = rendered.rstrip() + ";"
+        return rendered, findings
+    except Exception:  # noqa: BLE001 — fail-soft
+        return sql, findings
 
 
 def extract_aggregation_cte(
@@ -2613,6 +2796,12 @@ def extract_union_branches_to_ctes(
             used_names.add(cte.alias_or_name)
 
     # Build a CTE per branch and remember the replacement Select.
+    # For each non-trivial branch we ALSO run the layering passes
+    # (pushdown → joined → filtered → aggregation) on the branch's
+    # body so each branch becomes a fully-layered nested pipeline.
+    # The branch CTE name doubles as the entity_hint for that
+    # branch's internal layering, so its internal CTEs are named
+    # ``<branch_name>_joined`` / ``<branch_name>_aggregated``, etc.
     new_ctes: List[exp.CTE] = []
     replacements: List[exp.Select] = []
     fallback_idx = 1
@@ -2634,13 +2823,40 @@ def extract_union_branches_to_ctes(
             counter += 1
         used_names.add(cte_name)
 
+        # Recursively apply the layering passes to the branch body
+        # before wrapping it as a CTE. Each branch effectively becomes
+        # its own mini-pipeline: source CTEs → joined → filtered →
+        # aggregated → branch's outer SELECT. Failures fall back to
+        # the un-layered branch.
+        branch_sql_in = branch.sql()
+        try:
+            branch_sql_out = branch_sql_in
+            branch_sql_out, _ = push_projections_to_source_ctes(
+                branch_sql_out, []
+            )
+            branch_sql_out, _ = extract_joined_cte(
+                branch_sql_out, [], cte_name, log
+            )
+            branch_sql_out, _ = extract_filtered_cte(
+                branch_sql_out, [], cte_name, log
+            )
+            branch_sql_out, _ = extract_aggregation_cte(
+                branch_sql_out, [], cte_name, log
+            )
+            branch_parsed = sqlglot.parse(branch_sql_out, read=None)
+            if branch_parsed and branch_parsed[0] is not None:
+                branch_body = branch_parsed[0]
+            else:
+                branch_body = branch.copy()
+        except Exception:  # noqa: BLE001 — fail-soft, use original
+            branch_body = branch.copy()
+
         # The branch can carry its own ``WITH`` clause. sqlglot lets a
         # nested Select have its own with_, but rendering one inside a
         # CTE body is valid SQL only when the dialect supports nested
-        # WITH. Most dialects do (Snowflake / Databricks / Postgres);
-        # we leave any inner WITH attached and let sqlglot render it.
+        # WITH. Most dialects do (Snowflake / Databricks / Postgres).
         new_ctes.append(exp.CTE(
-            this=branch.copy(),
+            this=branch_body,
             alias=exp.TableAlias(this=exp.to_identifier(cte_name)),
         ))
 
@@ -2713,6 +2929,7 @@ class TransformLog:
     metadata_columns_stripped: bool = False
     aggregation_cte_extracted: bool = False
     joined_cte_extracted: bool = False
+    filtered_cte_extracted: bool = False
     union_branches_extracted: bool = False
     schema_replacements: List[Tuple[str, str]] = field(default_factory=list)
     obsolete_cte_names: List[str] = field(default_factory=list)
@@ -3158,10 +3375,17 @@ def emit_comment_header(
 
     if log.joined_cte_extracted:
         summary.append(
-            "  - Lifted JOINs and single-source derivations into a "
+            "  - Lifted JOINs and multi-source derivations into a "
             "dedicated `_joined` CTE; outer SELECT reads from a single-table FROM."
         )
         checklist.append("- [X] JOIN isolated into joined CTE.")
+
+    if log.filtered_cte_extracted:
+        summary.append(
+            "  - Lifted cross-source WHERE predicates into a dedicated "
+            "`_filtered` CTE so the joined CTE stays single-concern."
+        )
+        checklist.append("- [X] Cross-source filtering isolated.")
 
     if log.aggregation_cte_extracted:
         summary.append(
@@ -3299,6 +3523,14 @@ def apply_auto_fixes(
         out, findings = extract_joined_cte(out, findings, entity_hint, log)
         if out != before:
             log.joined_cte_extracted = True
+
+        # Lift the joined CTE's WHERE into a dedicated
+        # ``<entity>_filtered`` CTE so each layer stays single-concern.
+        # Runs between joined and aggregation passes.
+        before = out
+        out, findings = extract_filtered_cte(out, findings, entity_hint, log)
+        if out != before:
+            log.filtered_cte_extracted = True
 
         # Lift aggregates + GROUP BY into a dedicated ``<entity>_aggregated``
         # CTE so the outer SELECT only applies casting / defaulting.

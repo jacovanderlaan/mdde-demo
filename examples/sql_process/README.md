@@ -463,11 +463,12 @@ Conservative — only rewrites that preserve semantics on every
 engine. Currently:
 
 - `WHERE 1=1 AND ...` → `WHERE ...`
-- **Subquery → CTE lifting** (see below)
-- **Single-table projection pushdown** (renames + filters → source CTE; see below)
+- **Subquery → CTE lifting** including WHERE IN / EXISTS / EXCEPT, with correlated handling (see below)
+- **Single-table projection pushdown** (renames + single-source value transforms + filters → source CTE; see below)
 - **Joined CTE extraction** (JOINs + multi-source derivations → `<entity>_joined`)
+- **Filtered CTE extraction** (cross-source WHERE predicates → `<entity>_filtered`)
 - **Aggregation CTE extraction** (SUM/MAX/... + GROUP BY → `<entity>_aggregated`)
-- **UNION-branch lifting** (each branch → CTE; top-level is a pure UNION ALL)
+- **UNION-branch lifting** (each branch → CTE with nested layered pipeline; top-level is a pure UNION ALL)
 - **Passthrough-CTE rewrite** (`WITH x AS (SELECT * FROM real_table)` body mutated in place)
 - Format normalisation via `sqlglot.transpile(pretty=True)`
 
@@ -481,10 +482,11 @@ flows through (some or all of) these layers, top to bottom:
 
 | Layer | CTE name pattern | What lives here |
 |---|---|---|
-| Source | `<table>_prepared` / `<table>_filtered` | Bare columns + renames + single-table filters |
-| Joined | `<entity>_joined` | JOIN(s) + multi-source derivations |
-| Aggregated | `<entity>_aggregated` | GROUP BY + aggregates only (no JOINs, no derivations) |
-| Branch CTEs | `<branch_tag>` or `<entity>_<n>` | Each UNION ALL branch lifted as a CTE |
+| Source | `<table>_prepared` / `<table>_filtered` | Bare columns + renames + single-source non-cast transforms (UPPER, TRIM, arithmetic) + single-table filters |
+| Joined | `<entity>_joined` | JOIN(s) + multi-source derivations (no WHERE, no aggregation) |
+| Filtered | `<entity>_filtered` | Cross-source WHERE predicates (when joined CTE has any leftover WHERE) |
+| Aggregated | `<entity>_aggregated` | GROUP BY + aggregates only (no JOINs, no derivations, no WHERE) |
+| Branch CTEs | `<branch_tag>` or `<entity>_<n>` | Each UNION ALL branch becomes a CTE with its own nested layered pipeline inside |
 | Final SELECT | (no CTE — top level) | CAST + COALESCE + defaults + constants |
 
 Example end-to-end shape (see `expected_output/agg_customer_summary/optimized.sql`):

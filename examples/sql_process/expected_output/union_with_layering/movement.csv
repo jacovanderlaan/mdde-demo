@@ -1,0 +1,5 @@
+"target_model_name","target_table_name","target_column_name","source_model_name","source_table_name","source_column_name","derived_indicator","movement_expression","dependency_type","source_version"
+"Converter","union_with_layering","country","RAW","customer","country","false","c.country AS country","strict",""
+"Converter","union_with_layering","revenue","RAW","orders","amount","true","CAST(SUM(o.amount) AS DECIMAL(18, 2)) AS revenue","strict",""
+"Converter","union_with_layering","order_count","SSF","","","true","COUNT(*) AS order_count","strict",""
+"Converter","union_with_layering","channel","SSF","","","true","'web' AS channel","strict",""

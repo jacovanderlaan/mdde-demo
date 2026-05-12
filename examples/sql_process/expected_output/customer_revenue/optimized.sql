@@ -9,7 +9,7 @@ Migration Details:
 - Target SQL File:  optimized.sql
 - Summary of Changes:
   - Pushed single-table projections and filters into per-source `_filtered` / `_prepared` CTEs.
-  - Lifted JOINs and single-source derivations into a dedicated `_joined` CTE; outer SELECT reads from a single-table FROM.
+  - Lifted JOINs and multi-source derivations into a dedicated `_joined` CTE; outer SELECT reads from a single-table FROM.
 
 Validation Checklist:
 - [X] Modular CTE structure applied.

@@ -756,6 +756,30 @@ the source layer and inspired the rest of the pattern.
 - **Planned extension:** single-source derivations (UPPER, TRIM, arithmetic over one source) should fold INTO the source CTE rather than the joined CTE; today they live in the joined CTE. Multi-source derivations stay joined.
 - **Reflected in code at:** `extract_joined_cte()` + `_is_non_cast_derivation()`.
 
+### D49b. Source CTE owns single-source derivations (2026-05-12 revised)
+
+- **Question:** revisited the source-CTE strict-renames-only rule from D4. The customer's rule is "each CTE has one concern" — and single-source value transforms (UPPER, TRIM, arithmetic) ARE single-source work. So why are they in the joined CTE?
+- **Decision (supersedes D4):** source CTEs own bare columns + renames + non-cast single-source value transforms (UPPER, TRIM, SUBSTRING, arithmetic, etc.). Joined CTE only sees MULTI-source derivations. CAST / CASE / COALESCE / NULLIF / IFNULL / literals stay at the outer SELECT (formatting layer).
+- **Why it matters:** the layer/concern model wants each layer to own its full slice of work. Single-source UPPER and TRIM aren't formatting — they normalize the source. Putting them in the source CTE keeps the joined CTE focused on relating tables.
+- **Reflected in code at:** `_is_pushable_projection()` widened from renames-only to "any non-cast/default single-source projection". The pushdown loop and the joined-CTE assembly already coordinate on `_expression_uses_only()` for single-source ownership.
+
+### D50. Filtered CTE (`<entity>_filtered`) for cross-source WHEREs (2026-05-12)
+
+- **Question:** where do cross-source WHERE predicates live? Today they sit on the joined CTE; that mixes "JOIN + derivation" with "filtering" — two concerns in one CTE.
+- **Decision:** add a `<entity>_filtered` CTE between joined and aggregated. It does `SELECT * FROM <entity>_joined WHERE <cross-source predicates>`. Joined CTE has NO WHERE. Aggregated CTE reads from filtered (when filtered fires) or joined (when it doesn't).
+- **Fires when:** the joined CTE has a WHERE clause to lift. Single-source predicates still push into source CTEs (existing behavior).
+- **Why it matters:** keeps the layered model consistent — one concern per CTE. Lineage tools can attribute filtering to its own CTE node.
+- **Reflected in code at:** `extract_filtered_cte()` + wiring between joined and agg passes in `apply_auto_fixes`.
+
+### D51. Recursive per-branch layering inside UNION-branch CTEs (2026-05-12)
+
+- **Question:** UNION-branch lifting (D47) wraps each branch as a CTE but doesn't apply the source/joined/filtered/aggregation layering inside. Should it recurse?
+- **Decision:** yes. Inside `extract_union_branches_to_ctes`, before wrapping a branch as a CTE, render the branch to SQL and run the layering passes on it with the branch's CTE name as the entity_hint. The resulting layered SQL becomes the CTE body (a nested WITH clause with the branch's own source/joined/aggregated CTEs).
+- **Why it matters:** without this, only the FIRST branch ever got layered (because the existing passes find the first `Select` in the AST). Branches 2+ ended up as raw, un-layered SQL inside their CTE wrapper. Recursion makes the pipeline truly per-branch: each branch is a self-contained mini-pipeline.
+- **Compatibility:** the generated nested WITH clauses are valid in Snowflake / Databricks / Postgres / most modern engines. Anything that doesn't support nested WITH would need flattening (deferred).
+- **Fail-soft:** if recursive layering fails on a branch (parse error, transform crash), the un-layered branch is used as-is — never produces broken SQL.
+- **Reflected in code at:** the branch-processing loop in `extract_union_branches_to_ctes()`.
+
 ### D49. Passthrough-CTE rewrite (2026-05-12)
 
 - **Question:** Customer's hand-rolled CTEs are sometimes thin wrappers: `WITH x AS (SELECT * FROM real_table)`. Should pushdown go INTO `x`'s body or add a sibling CTE?
