@@ -1511,6 +1511,324 @@ def _is_simple_column_named(node: exp.Expression, name: str) -> bool:
 
 
 # -----------------------------------------------------------------------------
+# Aggregation CTE extraction
+# -----------------------------------------------------------------------------
+#
+# When the top-level SELECT mixes aggregations (SUM, MAX, COUNT, ...)
+# with non-aggregate projections AND casts/defaults, lift the join +
+# aggregation into a dedicated ``<entity>_aggregated`` CTE. The outer
+# SELECT then reads from that CTE and applies the casting / defaulting
+# / constants.
+#
+# Goal layering:
+#   <table>_prepared    sources, renames + filters    (existing pass)
+#   <entity>_aggregated joins + SUM/MAX/... + GROUP BY (this pass)
+#   outer SELECT        CAST + CASE + COALESCE + literals
+#
+# Heuristic for ``<entity>`` name:
+#   1. The SQL file's CREATE [OR REPLACE] VIEW name (if present).
+#   2. The file's annotation `entity` value (if present).
+#   3. Otherwise: the filename stem.
+# The caller passes ``entity_hint`` and we use it; the function itself
+# is parser-only and stays naming-agnostic.
+
+
+def _expression_has_aggregate(node: exp.Expression) -> bool:
+    """True if ``node`` contains an aggregate function in its OWN
+    scope that is NOT windowed.
+
+    Carve-outs (these aggregates don't trigger the GROUP BY semantics
+    we're capturing):
+      - Aggregates inside subqueries (scalar subselects, derived
+        tables) — their own SELECT scope handles grouping.
+      - Aggregates inside ``OVER (...)`` clauses (windowed
+        aggregates) — semantically a window function, not a true
+        aggregate. ``SUM(x) OVER (...)`` produces one row per input
+        row; ``SUM(x)`` (no OVER) collapses rows.
+    """
+    for agg in node.find_all(exp.AggFunc):
+        cur = agg.parent
+        in_nested_scope = False
+        while cur is not None and cur is not node:
+            if isinstance(cur, exp.Window):
+                in_nested_scope = True
+                break
+            if isinstance(cur, (exp.Subquery, exp.Select)) and cur is not node:
+                in_nested_scope = True
+                break
+            cur = cur.parent
+        if not in_nested_scope:
+            return True
+    return False
+
+
+def _strip_outer_alias_and_qualifiers(
+    node: exp.Expression,
+    table_aliases: Set[str],
+) -> exp.Expression:
+    """Return a copy of ``node`` with every ``<alias>.<col>`` reference
+    (where alias is in ``table_aliases``) rewritten to bare ``col``.
+
+    Used when moving an expression INTO the aggregation CTE that lives
+    one level above the per-source CTEs: at that level columns are
+    table-qualified, so renaming a projection's columns to plain
+    column refs would break it. We keep the qualifier when it points
+    to a source CTE alias, and drop it only for aliases we know we're
+    flattening (the join-input aliases)."""
+    # Currently we KEEP qualifiers; the agg CTE references columns
+    # via their source CTE aliases. This is a placeholder helper for
+    # future per-layer flattening.
+    return node.copy()
+
+
+def extract_aggregation_cte(
+    sql: str,
+    findings: List[QualityFinding],
+    entity_hint: str,
+    log: "TransformLog",
+) -> Tuple[str, List[QualityFinding]]:
+    """Lift aggregates + GROUP BY into a dedicated ``<entity>_aggregated``
+    CTE.
+
+    Fires when ALL of the following are true:
+      - The top-level SELECT contains at least one aggregate
+        (``SUM``, ``MAX``, ``MIN``, ``COUNT``, ``AVG``, ...).
+      - The outer SELECT also has at least one CAST / CASE / COALESCE /
+        function call / constant in its projections. (If everything
+        outer is just bare columns + aggregates, the aggregation CTE
+        wouldn't simplify anything.)
+      - There is no UNION at the top level. UNION-of-aggregations is
+        out of scope for this transform.
+
+    Strategy: build a new SELECT that takes the existing outer FROM /
+    JOIN / WHERE / GROUP BY / HAVING and replaces the projection list
+    with:
+      - every non-aggregate outer projection that's a bare column /
+        rename (kept as-is — these are the implicit GROUP BY keys),
+      - every aggregate sub-expression assigned a stable
+        ``<source-name>_<agg>`` alias.
+    Wrap that SELECT as ``<entity>_aggregated``.
+
+    Rewrite the OUTER SELECT to project from ``<entity>_aggregated``,
+    replacing each aggregate occurrence with a reference to its
+    pre-aggregated column. Bare/non-aggregate projections become bare
+    column references.
+
+    Safety: fail-soft on any parse or analysis problem — return the
+    input unchanged.
+    """
+    try:
+        statements = sqlglot.parse(sql, read=None)
+    except sqlglot.errors.ParseError:
+        return sql, findings
+    if not statements or statements[0] is None:
+        return sql, findings
+
+    root = statements[0]
+    if isinstance(root, exp.Create) and root.this:
+        target = root.expression or root.this
+    elif isinstance(root, exp.Query):
+        target = root
+    else:
+        target = root.find(exp.Select)
+    if not isinstance(target, exp.Select):
+        return sql, findings
+
+    # Bail on UNION at the top level.
+    if target.args.get("unions") or any(target.find_all(exp.Union)):
+        # Only bail when the UNION is at the top-level (not nested
+        # in a subquery / CTE body).
+        parent_union = None
+        for u in target.find_all(exp.Union):
+            # If `u` is a descendant of an already-collected CTE body,
+            # it's not at top-level; ignore. Easier heuristic: if u
+            # equals target's parent or target is u.this / u.expression.
+            if target is u.this or target is u.expression:
+                parent_union = u
+                break
+        if parent_union is not None:
+            return sql, findings
+
+    # Look for aggregates in outer projections only — aggregates
+    # inside subqueries / window functions are not our target.
+    outer_projections = list(target.expressions)
+    has_aggregate = any(_expression_has_aggregate(p) for p in outer_projections)
+    if not has_aggregate:
+        return sql, findings
+
+    # Look for at least one "formatting" projection (CAST, CASE,
+    # COALESCE, arithmetic, non-aggregate function call, or literal).
+    # If everything non-aggregate is just a bare column / rename, the
+    # split adds noise without simplifying.
+    def _is_formatting(p: exp.Expression) -> bool:
+        if _expression_has_aggregate(p):
+            return False
+        if isinstance(p, exp.Column):
+            return False
+        if isinstance(p, exp.Alias) and isinstance(p.this, exp.Column):
+            return False
+        return True
+
+    has_formatting = any(_is_formatting(p) for p in outer_projections)
+    if not has_formatting:
+        return sql, findings
+
+    # Construct the aggregation CTE name.
+    cte_name = f"{entity_hint}_aggregated"
+
+    # Find every distinct aggregate expression in the outer
+    # projections, give it a stable name, and remember the mapping.
+    # The same aggregate expression appearing twice (e.g.,
+    # ``CAST(SUM(x) AS ...)`` twice for different outer alias names)
+    # should share ONE pre-aggregated column.
+    agg_cache: Dict[str, Tuple[str, exp.Expression]] = {}
+    # ^ key = canonical SQL of the aggregate expression
+    # value = (column alias inside the agg CTE, original aggregate
+    #          expression to put in the agg CTE projection list)
+
+    def _stable_agg_alias(agg: exp.Expression, idx: int) -> str:
+        # Try to derive a readable name from the aggregate's first
+        # column argument + the aggregate's function name (suffix).
+        cols = list(agg.find_all(exp.Column))
+        fn_name = (agg.key or "agg").lower()  # 'sum', 'max', 'count', ...
+        if cols:
+            base = cols[0].name
+            return f"{base}_{fn_name}"
+        return f"agg_{idx}"
+
+    def _agg_is_top_level(agg: exp.AggFunc, root: exp.Expression) -> bool:
+        """True if ``agg`` is a true top-level aggregate (not inside a
+        Window, Subquery, or nested Select scope under ``root``)."""
+        cur = agg.parent
+        while cur is not None and cur is not root:
+            if isinstance(cur, exp.Window):
+                return False
+            if isinstance(cur, (exp.Subquery, exp.Select)) and cur is not root:
+                return False
+            cur = cur.parent
+        return True
+
+    agg_idx = 1
+    new_outer_projections: List[exp.Expression] = []
+    for proj in outer_projections:
+        # Rewrite each top-level aggregate within the projection to a
+        # reference to its pre-aggregated column. Aggregates inside
+        # OVER (...) clauses or scalar subqueries are LEFT IN PLACE
+        # because they aren't truly grouping aggregates.
+        proj_copy = proj.copy()
+        for agg in list(proj_copy.find_all(exp.AggFunc)):
+            if not _agg_is_top_level(agg, proj_copy):
+                continue
+            key = agg.sql()
+            if key in agg_cache:
+                col_alias, _ = agg_cache[key]
+            else:
+                col_alias = _stable_agg_alias(agg, agg_idx)
+                used = {a for (a, _) in agg_cache.values()}
+                if col_alias in used:
+                    base = col_alias
+                    n = 2
+                    while f"{base}_{n}" in used:
+                        n += 1
+                    col_alias = f"{base}_{n}"
+                agg_cache[key] = (col_alias, agg.copy())
+                agg_idx += 1
+            agg.replace(exp.column(col_alias))
+        new_outer_projections.append(proj_copy)
+
+    # Build the aggregation CTE's projection list:
+    #   1. Every non-aggregate, non-formatting outer projection
+    #      (bare columns + renames) — these are implicit GROUP BY keys
+    #      and pass through unchanged.
+    #   2. Each cached aggregate, aliased to its stable name.
+    agg_cte_projections: List[exp.Expression] = []
+    seen_passthrough: Set[str] = set()
+    for proj in outer_projections:
+        if _expression_has_aggregate(proj):
+            continue
+        if _is_formatting(proj):
+            # Formatting projections stay outer — but if they reference
+            # a bare column from a source CTE, that column needs to
+            # exist in the agg CTE output too. Expose it as a bare
+            # column.
+            for col in proj.find_all(exp.Column):
+                key = col.sql()
+                if key in seen_passthrough:
+                    continue
+                seen_passthrough.add(key)
+                agg_cte_projections.append(col.copy())
+            continue
+        # Non-aggregate, non-formatting → pass through.
+        key = proj.sql()
+        if key in seen_passthrough:
+            continue
+        seen_passthrough.add(key)
+        agg_cte_projections.append(proj.copy())
+
+    for col_alias, agg_expr in agg_cache.values():
+        agg_cte_projections.append(exp.alias_(agg_expr, col_alias))
+
+    # The agg CTE's FROM/JOIN/WHERE/GROUP BY/HAVING are copied from
+    # the outer SELECT.
+    agg_select = exp.Select(expressions=agg_cte_projections)
+    from_clause = target.args.get("from_") or target.args.get("from")
+    if from_clause is not None:
+        agg_select.set("from_", from_clause.copy())
+    joins = target.args.get("joins")
+    if joins:
+        agg_select.set("joins", [j.copy() for j in joins])
+    where = target.args.get("where")
+    if where is not None:
+        agg_select.set("where", where.copy())
+    group = target.args.get("group")
+    if group is not None:
+        agg_select.set("group", group.copy())
+    having = target.args.get("having")
+    if having is not None:
+        agg_select.set("having", having.copy())
+
+    # Build the new outer SELECT — replaces FROM with the agg CTE,
+    # drops JOINs / WHERE / GROUP BY / HAVING (all moved up into
+    # the CTE), and uses the rewritten outer projections.
+    target.set("expressions", new_outer_projections)
+    target.set("from_", exp.From(this=exp.Table(this=exp.to_identifier(cte_name))))
+    target.set("joins", None)
+    target.set("where", None)
+    target.set("group", None)
+    target.set("having", None)
+    # Also strip any qualifiers on the outer column refs — at this
+    # level columns come from a single source (the agg CTE) with no
+    # alias, so leaving e.g., ``app.appraisal_amount_currency`` would
+    # be invalid.
+    for col in target.find_all(exp.Column):
+        col.set("table", None)
+
+    # Merge the new CTE into the WITH clause.
+    new_cte = exp.CTE(
+        this=agg_select,
+        alias=exp.TableAlias(this=exp.to_identifier(cte_name)),
+    )
+    existing_with = target.args.get("with_")
+    if existing_with:
+        existing_with.set(
+            "expressions",
+            list(existing_with.expressions) + [new_cte],
+        )
+    else:
+        target.set("with_", exp.With(expressions=[new_cte], recursive=False))
+
+    log.aggregation_cte_extracted = True
+
+    try:
+        rendered = root.sql(pretty=True)
+        if sql.rstrip().endswith(";") and not rendered.rstrip().endswith(";"):
+            rendered = rendered.rstrip() + ";"
+        return rendered, findings
+    except Exception:  # noqa: BLE001 — fail-soft
+        return sql, findings
+
+
+# -----------------------------------------------------------------------------
 # Customer rule-pack transforms
 # -----------------------------------------------------------------------------
 
@@ -1530,6 +1848,7 @@ class TransformLog:
     where_true_removed: bool = False
     qualifier_rewritten: bool = False
     metadata_columns_stripped: bool = False
+    aggregation_cte_extracted: bool = False
     schema_replacements: List[Tuple[str, str]] = field(default_factory=list)
     obsolete_cte_names: List[str] = field(default_factory=list)
     stripped_metadata_columns: List[str] = field(default_factory=list)
@@ -1972,6 +2291,13 @@ def emit_comment_header(
         )
         checklist.append("- [X] Modular CTE structure applied.")
 
+    if log.aggregation_cte_extracted:
+        summary.append(
+            "  - Lifted aggregates and GROUP BY into a dedicated "
+            "`_aggregated` CTE; outer SELECT applies casting / defaulting only."
+        )
+        checklist.append("- [X] Aggregation isolated from formatting.")
+
     if log.obsolete_ctes_removed:
         if log.obsolete_cte_names:
             obsolete = ", ".join(f"`{n}`" for n in log.obsolete_cte_names)
@@ -2025,6 +2351,7 @@ def apply_auto_fixes(
     customer_config: Optional["CustomerRuleConfig"] = None,
     optimize_config: Optional["OptimizeConfig"] = None,
     detection_only: bool = False,
+    entity_hint: str = "result",
 ) -> Tuple[str, List[QualityFinding], TransformLog]:
     """Rewrite the SQL to fix the safe issues. Mutates findings in
     place, marking the auto-fixed ones. Returns the rewritten SQL,
@@ -2083,6 +2410,15 @@ def apply_auto_fixes(
         out, findings = push_projections_to_source_ctes(out, findings)
         if out != before:
             log.projections_pushed = True
+
+        # Lift aggregates + GROUP BY into a dedicated ``<entity>_aggregated``
+        # CTE so the outer SELECT only applies casting / defaulting.
+        # Runs AFTER projection pushdown so the source CTEs are in
+        # place; the agg CTE references those CTE aliases.
+        before = out
+        out, findings = extract_aggregation_cte(out, findings, entity_hint, log)
+        if out != before:
+            log.aggregation_cte_extracted = True
 
         # Customer rule 7 (qualifier rewrite): replace catalog/schema
         # on every base-table reference with the configured qualifier.
@@ -3846,6 +4182,7 @@ def process_folder(
             customer_config=customer_config,
             optimize_config=opt_cfg,
             detection_only=detection_only,
+            entity_hint=pf.entity_name,
         )
         findings_per_file[rel_key] = findings
 
