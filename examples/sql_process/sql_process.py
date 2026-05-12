@@ -1829,6 +1829,270 @@ def extract_aggregation_cte(
 
 
 # -----------------------------------------------------------------------------
+# UNION-branch extraction
+# -----------------------------------------------------------------------------
+#
+# When the top-level statement is a ``UNION ALL`` (two or more
+# branches), lift every branch into its own CTE so the top-level
+# becomes a pure
+#
+#     SELECT * FROM <branch_1_cte>
+#     UNION ALL
+#     SELECT * FROM <branch_2_cte>
+#     ...
+#
+# Nothing else lives in the union body. Each branch CTE holds its
+# own per-source layering (sources, joins, aggregations, formatting)
+# unchanged from however the previous passes shaped that branch.
+#
+# Scope:
+#   - UNION ALL only. UNION (distinct), INTERSECT, EXCEPT are left
+#     alone — their row-count semantics make wholesale lifting
+#     surprising.
+#   - Only fires when there are 2+ non-trivial branches. If every
+#     branch is already ``SELECT * FROM <name>``, nothing to do.
+
+
+def _walk_union_branches(node: exp.Expression) -> List[exp.Expression]:
+    """Flatten a left-associative UNION tree into ``[branch1, branch2, ...]``.
+
+    sqlglot represents ``A UNION ALL B UNION ALL C`` as
+    ``Union(this=Union(this=A, expression=B), expression=C)``. This
+    walker returns ``[A, B, C]`` in source order.
+
+    Stops descending at the first non-Union node; the result always
+    contains at least one element. UNION nodes with ``distinct=True``
+    (i.e., set-distinct UNION) act as boundaries — we don't flatten
+    across them.
+    """
+    out: List[exp.Expression] = []
+
+    def _visit(n: exp.Expression) -> None:
+        if (
+            isinstance(n, exp.Union)
+            and not n.args.get("distinct")
+            and not n.args.get("by_name")
+        ):
+            _visit(n.this)
+            _visit(n.expression)
+        else:
+            out.append(n)
+
+    _visit(node)
+    return out
+
+
+def _infer_branch_name_from_literal(branch: exp.Expression) -> Optional[str]:
+    """Look for a ``'literal' AS <something>`` projection in the
+    branch and snake_case the literal as a candidate CTE name.
+
+    The customer's UNION-of-aggregations files typically have a tag
+    column like ``'Loan Loss Allowance' AS valuation_type`` so each
+    branch is uniquely identifiable. Returns ``None`` when no
+    suitable literal is found.
+    """
+    select = branch if isinstance(branch, exp.Select) else branch.find(exp.Select)
+    if not isinstance(select, exp.Select):
+        return None
+    for proj in select.expressions or []:
+        # ``'X' AS something`` → Alias whose ``.this`` is a Literal.
+        if not isinstance(proj, exp.Alias):
+            continue
+        inner = proj.this
+        if not isinstance(inner, exp.Literal):
+            continue
+        if not inner.is_string:
+            continue
+        value = inner.this  # the string content
+        if not value:
+            continue
+        # Snake-case: lower, replace non-alphanum with _, collapse runs.
+        slug_chars: List[str] = []
+        prev_underscore = False
+        for ch in value.lower():
+            if ch.isalnum():
+                slug_chars.append(ch)
+                prev_underscore = False
+            else:
+                if not prev_underscore:
+                    slug_chars.append("_")
+                prev_underscore = True
+        slug = "".join(slug_chars).strip("_")
+        if slug and not slug[0].isdigit():
+            return slug
+    return None
+
+
+def extract_union_branches_to_ctes(
+    sql: str,
+    findings: List[QualityFinding],
+    entity_hint: str,
+    log: "TransformLog",
+) -> Tuple[str, List[QualityFinding]]:
+    """Lift each top-level ``UNION ALL`` branch into its own CTE.
+
+    Outer statement becomes a pure union of ``SELECT * FROM <cte>``
+    references in source order. Existing CTEs at the top-level WITH
+    are preserved; new branch CTEs are appended.
+
+    Naming:
+      - First try a string-literal projection in the branch (e.g.,
+        ``'Loan Loss Allowance' AS valuation_type`` →
+        ``loan_loss_allowance``).
+      - Fall back to ``<entity>_<n>`` (1-based index).
+
+    Skipped:
+      - Statements that aren't a top-level ``UNION ALL`` (or with
+        ``distinct=True`` — set-distinct UNION).
+      - Branches that are already a bare ``SELECT * FROM <single_name>``
+        (already lifted; replacing them with the same shape is noise).
+        If EVERY branch is already lifted, the whole transform is a
+        no-op.
+    """
+    try:
+        statements = sqlglot.parse(sql, read=None)
+    except sqlglot.errors.ParseError:
+        return sql, findings
+    if not statements or statements[0] is None:
+        return sql, findings
+
+    root = statements[0]
+    # We operate on a top-level Union. If wrapped in a Create (e.g.,
+    # CREATE VIEW foo AS <union>), descend.
+    container: Optional[exp.Expression] = None
+    union_node: Optional[exp.Union] = None
+    if isinstance(root, exp.Create) and isinstance(
+        root.expression, exp.Union
+    ):
+        container = root
+        union_node = root.expression
+    elif isinstance(root, exp.Union):
+        union_node = root
+    else:
+        return sql, findings
+
+    if union_node.args.get("distinct") or union_node.args.get("by_name"):
+        return sql, findings
+
+    branches = _walk_union_branches(union_node)
+    if len(branches) < 2:
+        return sql, findings
+
+    def _is_already_lifted(b: exp.Expression) -> bool:
+        """``SELECT * FROM <name>`` with no JOINs / WHERE / GROUP / etc."""
+        if not isinstance(b, exp.Select):
+            return False
+        projections = b.expressions or []
+        if len(projections) != 1 or not isinstance(projections[0], exp.Star):
+            return False
+        if (
+            b.args.get("joins")
+            or b.args.get("where")
+            or b.args.get("group")
+            or b.args.get("having")
+            or b.args.get("qualify")
+            or b.args.get("with_")
+        ):
+            return False
+        from_clause = b.args.get("from_") or b.args.get("from")
+        if from_clause is None:
+            return False
+        tables = list(from_clause.find_all(exp.Table))
+        subqueries = list(from_clause.find_all(exp.Subquery))
+        if len(tables) != 1 or subqueries:
+            return False
+        return True
+
+    if all(_is_already_lifted(b) for b in branches):
+        return sql, findings
+
+    # Existing top-level WITH (CTEs already declared above the union).
+    existing_with = union_node.args.get("with_")
+    used_names: Set[str] = set()
+    if existing_with:
+        for cte in existing_with.expressions:
+            used_names.add(cte.alias_or_name)
+
+    # Build a CTE per branch and remember the replacement Select.
+    new_ctes: List[exp.CTE] = []
+    replacements: List[exp.Select] = []
+    fallback_idx = 1
+    for branch in branches:
+        if _is_already_lifted(branch):
+            # Already a ``SELECT * FROM <name>`` reference — keep it.
+            replacements.append(branch)
+            continue
+
+        # Pick a name for this branch's CTE.
+        inferred = _infer_branch_name_from_literal(branch)
+        base = inferred or f"{entity_hint}_{fallback_idx}"
+        if not inferred:
+            fallback_idx += 1
+        cte_name = base
+        counter = 2
+        while cte_name in used_names:
+            cte_name = f"{base}_{counter}"
+            counter += 1
+        used_names.add(cte_name)
+
+        # The branch can carry its own ``WITH`` clause. sqlglot lets a
+        # nested Select have its own with_, but rendering one inside a
+        # CTE body is valid SQL only when the dialect supports nested
+        # WITH. Most dialects do (Snowflake / Databricks / Postgres);
+        # we leave any inner WITH attached and let sqlglot render it.
+        new_ctes.append(exp.CTE(
+            this=branch.copy(),
+            alias=exp.TableAlias(this=exp.to_identifier(cte_name)),
+        ))
+
+        # Build the replacement: SELECT * FROM <cte_name>.
+        replacement = exp.Select(expressions=[exp.Star()]).from_(
+            exp.Table(this=exp.to_identifier(cte_name))
+        )
+        replacements.append(replacement)
+
+    # Rebuild the union tree from the (possibly mixed lifted/already-
+    # lifted) replacement list. Left-associative chain:
+    #   ((R1 UNION ALL R2) UNION ALL R3) ...
+    new_union: exp.Expression = replacements[0]
+    for nxt in replacements[1:]:
+        new_union = exp.Union(this=new_union, expression=nxt, distinct=False)
+
+    # Merge new CTEs into the WITH clause.
+    if existing_with:
+        existing_with.set(
+            "expressions",
+            list(existing_with.expressions) + new_ctes,
+        )
+        # Re-attach the with_ to the new union root.
+        new_union.set("with_", existing_with)
+    elif new_ctes:
+        new_union.set(
+            "with_",
+            exp.With(expressions=new_ctes, recursive=False),
+        )
+
+    # Swap the new union into the parent (Create or top-level).
+    if container is not None:
+        container.set("expression", new_union)
+        statements[0] = container
+    else:
+        statements[0] = new_union
+
+    log.union_branches_extracted = True
+
+    try:
+        rendered = "\n".join(
+            s.sql(pretty=True) for s in statements if s is not None
+        )
+        if sql.rstrip().endswith(";") and not rendered.rstrip().endswith(";"):
+            rendered = rendered.rstrip() + ";"
+        return rendered, findings
+    except Exception:  # noqa: BLE001 — fail-soft
+        return sql, findings
+
+
+# -----------------------------------------------------------------------------
 # Customer rule-pack transforms
 # -----------------------------------------------------------------------------
 
@@ -1849,6 +2113,7 @@ class TransformLog:
     qualifier_rewritten: bool = False
     metadata_columns_stripped: bool = False
     aggregation_cte_extracted: bool = False
+    union_branches_extracted: bool = False
     schema_replacements: List[Tuple[str, str]] = field(default_factory=list)
     obsolete_cte_names: List[str] = field(default_factory=list)
     stripped_metadata_columns: List[str] = field(default_factory=list)
@@ -2298,6 +2563,14 @@ def emit_comment_header(
         )
         checklist.append("- [X] Aggregation isolated from formatting.")
 
+    if log.union_branches_extracted:
+        summary.append(
+            "  - Lifted each `UNION ALL` branch into its own CTE; "
+            "top-level statement is a pure `SELECT * FROM cte_a UNION ALL "
+            "SELECT * FROM cte_b ...`."
+        )
+        checklist.append("- [X] UNION branches lifted to CTEs.")
+
     if log.obsolete_ctes_removed:
         if log.obsolete_cte_names:
             obsolete = ", ".join(f"`{n}`" for n in log.obsolete_cte_names)
@@ -2419,6 +2692,18 @@ def apply_auto_fixes(
         out, findings = extract_aggregation_cte(out, findings, entity_hint, log)
         if out != before:
             log.aggregation_cte_extracted = True
+
+        # Lift each top-level ``UNION ALL`` branch into its own CTE so
+        # the top-level statement is a pure
+        # ``SELECT * FROM cte_a UNION ALL SELECT * FROM cte_b ...``.
+        # Runs after the per-branch transforms (which currently only
+        # affect the first branch — the others are lifted as-is).
+        before = out
+        out, findings = extract_union_branches_to_ctes(
+            out, findings, entity_hint, log
+        )
+        if out != before:
+            log.union_branches_extracted = True
 
         # Customer rule 7 (qualifier rewrite): replace catalog/schema
         # on every base-table reference with the configured qualifier.
