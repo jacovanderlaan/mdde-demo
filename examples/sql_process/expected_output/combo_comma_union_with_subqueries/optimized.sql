@@ -30,6 +30,7 @@ WITH _sub1 AS (
     MAX(amount) AS value
   FROM schema_identifier_ssf_snapshot.orders
 ), has_email AS (
+  -- Source filter: single-table SELECT + WHERE for one source
   WITH customer_filtered AS (
     SELECT
       customer_id AS customer_id,
@@ -52,6 +53,7 @@ WITH _sub1 AS (
     'has_email' AS bucket
   FROM customer_filtered AS c
 ), no_email AS (
+  -- Source filter: single-table SELECT + WHERE for one source
   WITH customer_filtered AS (
     SELECT
       customer_id AS customer_id,

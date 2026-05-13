@@ -26,6 +26,7 @@ Validation Checklist:
 - [X] Table qualifiers normalised.
 */
 
+-- Source filter: single-table SELECT + WHERE for one source
 WITH customer_filtered AS (
   SELECT
     customer_id AS customer_id,
@@ -35,7 +36,9 @@ WITH customer_filtered AS (
   FROM schema_identifier_ssf_snapshot.customer
   WHERE
     NOT email IS NULL
-), orders_filtered AS (
+)
+-- Source filter: single-table SELECT + WHERE for one source
+, orders_filtered AS (
   SELECT
     amount,
     customer_id,
@@ -44,7 +47,9 @@ WITH customer_filtered AS (
   FROM schema_identifier_ssf_snapshot.orders
   WHERE
     amount > 0
-), combo_casting_at_final_only_joined AS (
+)
+-- Joined: JOINs + multi-source derivations only (no WHERE, no aggregation)
+, combo_casting_at_final_only_joined AS (
   SELECT
     customer_id,
     country_upper,
@@ -56,7 +61,9 @@ WITH customer_filtered AS (
   FROM customer_filtered AS c
   INNER JOIN orders_filtered AS o
     ON o.customer_id = c.customer_id
-), combo_casting_at_final_only_aggregated AS (
+)
+-- Aggregated: GROUP BY + aggregates + HAVING (no JOIN, no derivation, no WHERE)
+, combo_casting_at_final_only_aggregated AS (
   SELECT
     customer_id,
     country_upper,
@@ -73,7 +80,7 @@ WITH customer_filtered AS (
     order_id,
     payment_method
   HAVING
-    SUM(amount) > 0
+    amount_sum > 0
 )
 /* @mdde-entity: combo_casting_at_final_only */ /* @mdde-layer: business */ /* @mdde-stereotype: fact */ /* @mdde-description: Exercises that CAST / COALESCE / NULLIF / CASE / constants */ /* ALWAYS end up at the final SELECT, never folded into source/joined/agg CTEs. */ /* The input deliberately mixes casting and defaulting with: */ /*   - single-source value transforms that DO fold into source CTEs */ /*   - multi-source derivations that DO fold into the joined CTE */ /*   - aggregates that DO fold into the agg CTE */ /* Verifies the boundary stays in the right place across all combinations. */
 SELECT

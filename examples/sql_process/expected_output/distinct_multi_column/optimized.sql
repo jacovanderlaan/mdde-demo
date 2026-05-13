@@ -18,6 +18,7 @@ Validation Checklist:
 - [X] Table qualifiers normalised.
 */
 
+-- Ranked: ROW_NUMBER() OVER (PARTITION BY all projection columns) — replaces SELECT DISTINCT, makes duplicates inspectable
 WITH distinct_multi_column_ranked AS (
   /* @mdde-entity: distinct_multi_column */ /* @mdde-layer: business */ /* @mdde-stereotype: dim */ /* @mdde-description: Multi-column DISTINCT over a JOIN. Exercises the */ /* DISTINCT-to-ROW_NUMBER rewrite with multiple partition columns and ORDER BY */ /* + LIMIT at the outer SELECT (which should move to the deduped layer's outer). */
   SELECT
@@ -36,7 +37,9 @@ WITH distinct_multi_column_ranked AS (
     ON l.customer_id = c.customer_id
   WHERE
     l.status = 'OPEN'
-), distinct_multi_column_deduped AS (
+)
+-- Deduped: filters WHERE rn = 1 (removes duplicates surfaced by the ranked CTE above)
+, distinct_multi_column_deduped AS (
   SELECT
     customer_id,
     country,

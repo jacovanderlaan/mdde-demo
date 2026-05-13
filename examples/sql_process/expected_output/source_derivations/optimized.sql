@@ -20,6 +20,7 @@ Validation Checklist:
 - [X] Table qualifiers normalised.
 */
 
+-- Source prep: single-table SELECT + renames + single-source value transforms
 WITH customer_prepared AS (
   SELECT
     customer_id AS customer_id,
@@ -27,7 +28,9 @@ WITH customer_prepared AS (
     SUBSTRING(email, STR_POSITION(email, '@') + 1) AS email_domain,
     country AS country
   FROM schema_identifier_ssf_snapshot.customer
-), orders_prepared AS (
+)
+-- Source prep: single-table SELECT + renames + single-source value transforms
+, orders_prepared AS (
   SELECT
     order_date AS order_date,
     amount * 1.21 AS amount_with_vat,
@@ -37,7 +40,9 @@ WITH customer_prepared AS (
     customer_id,
     order_id
   FROM schema_identifier_ssf_snapshot.orders
-), source_derivations_joined AS (
+)
+-- Joined: JOINs + multi-source derivations only (no WHERE, no aggregation)
+, source_derivations_joined AS (
   SELECT
     customer_id,
     email_clean,

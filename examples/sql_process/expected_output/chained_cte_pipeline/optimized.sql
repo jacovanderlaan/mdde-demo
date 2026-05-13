@@ -53,7 +53,9 @@ WITH base_customers AS (
     ct.order_count,
     ROW_NUMBER() OVER (ORDER BY ct.lifetime_revenue DESC) AS revenue_rank
   FROM customer_totals AS ct
-), chained_cte_pipeline_joined AS (
+)
+-- Joined: JOINs + multi-source derivations only (no WHERE, no aggregation)
+, chained_cte_pipeline_joined AS (
   SELECT
     customer_id,
     country,
@@ -64,7 +66,9 @@ WITH base_customers AS (
   FROM ranked_customers AS rc
   INNER JOIN base_customers AS bc
     ON bc.customer_id = rc.customer_id
-), chained_cte_pipeline_filtered AS (
+)
+-- Filtered: cross-source WHERE predicates (no JOIN, no derivation, no aggregation)
+, chained_cte_pipeline_filtered AS (
   SELECT
     *
   FROM chained_cte_pipeline_joined

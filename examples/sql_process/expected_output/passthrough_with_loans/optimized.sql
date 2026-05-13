@@ -36,7 +36,9 @@ WITH active_customers AS (
     status AS loan_status,
     customer_id
   FROM schema_identifier_ssf_snapshot.loans
-), passthrough_with_loans_joined AS (
+)
+-- Joined: JOINs + multi-source derivations only (no WHERE, no aggregation)
+, passthrough_with_loans_joined AS (
   SELECT
     customer_id,
     email,

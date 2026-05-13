@@ -20,11 +20,14 @@ Validation Checklist:
 - [X] Table qualifiers normalised.
 */
 
+-- Source prep: single-table SELECT + renames + single-source value transforms
 WITH customer_prepared AS (
   SELECT
     customer_id AS customer_id
   FROM schema_identifier_ssf_snapshot.customer
-), orders_filtered AS (
+)
+-- Source filter: single-table SELECT + WHERE for one source
+, orders_filtered AS (
   SELECT
     order_id AS order_id,
     order_date AS order_date,
@@ -33,7 +36,9 @@ WITH customer_prepared AS (
   FROM schema_identifier_ssf_snapshot.orders
   WHERE
     amount > 0
-), window_ranked_orders_joined AS (
+)
+-- Joined: JOINs + multi-source derivations only (no WHERE, no aggregation)
+, window_ranked_orders_joined AS (
   SELECT
     customer_id,
     order_id,

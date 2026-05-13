@@ -20,6 +20,7 @@ Validation Checklist:
 
 /* @mdde-entity: customer_segment_analytics */ /* @mdde-layer: business */ /* @mdde-stereotype: fact_aggregate */ /* @mdde-description: Customer segment analytics with scalar subqueries and multi-CTE chain */
 CREATE OR REPLACE VIEW customer_segment_analytics AS
+-- Source prep: single-table SELECT + renames + single-source value transforms
 WITH stg_customers_prepared AS (
   SELECT
     email, /* @pii */
@@ -78,7 +79,9 @@ WITH stg_customers_prepared AS (
   SELECT
     MAX(total_revenue) AS value
   FROM customer_totals
-), customer_segment_analytics_joined AS (
+)
+-- Joined: JOINs + multi-source derivations only (no WHERE, no aggregation)
+, customer_segment_analytics_joined AS (
   SELECT
     customer_id,
     email,

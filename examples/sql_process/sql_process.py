@@ -2823,6 +2823,26 @@ def extract_aggregation_cte(
         return True
 
     agg_idx = 1
+
+    def _intern_agg(agg: exp.Expression) -> str:
+        """Look up or allocate a stable column alias for an aggregate
+        expression. Side-effect: registers it in ``agg_cache``."""
+        nonlocal agg_idx
+        key = agg.sql()
+        if key in agg_cache:
+            return agg_cache[key][0]
+        col_alias = _stable_agg_alias(agg, agg_idx)
+        used = {a for (a, _) in agg_cache.values()}
+        if col_alias in used:
+            base = col_alias
+            n = 2
+            while f"{base}_{n}" in used:
+                n += 1
+            col_alias = f"{base}_{n}"
+        agg_cache[key] = (col_alias, agg.copy())
+        agg_idx += 1
+        return col_alias
+
     new_outer_projections: List[exp.Expression] = []
     for proj in outer_projections:
         # Rewrite each top-level aggregate within the projection to a
@@ -2833,21 +2853,7 @@ def extract_aggregation_cte(
         for agg in list(proj_copy.find_all(exp.AggFunc)):
             if not _agg_is_top_level(agg, proj_copy):
                 continue
-            key = agg.sql()
-            if key in agg_cache:
-                col_alias, _ = agg_cache[key]
-            else:
-                col_alias = _stable_agg_alias(agg, agg_idx)
-                used = {a for (a, _) in agg_cache.values()}
-                if col_alias in used:
-                    base = col_alias
-                    n = 2
-                    while f"{base}_{n}" in used:
-                        n += 1
-                    col_alias = f"{base}_{n}"
-                agg_cache[key] = (col_alias, agg.copy())
-                agg_idx += 1
-            agg.replace(exp.column(col_alias))
+            agg.replace(exp.column(_intern_agg(agg)))
         new_outer_projections.append(proj_copy)
 
     # Build the aggregation CTE's projection list:
@@ -2899,7 +2905,15 @@ def extract_aggregation_cte(
         agg_select.set("group", group.copy())
     having = target.args.get("having")
     if having is not None:
-        agg_select.set("having", having.copy())
+        having_copy = having.copy()
+        # Rewrite top-level aggregates in HAVING to reference the
+        # cached column alias (so the HAVING reads from the agg
+        # CTE's own projection list instead of recomputing).
+        for agg in list(having_copy.find_all(exp.AggFunc)):
+            if not _agg_is_top_level(agg, having_copy):
+                continue
+            agg.replace(exp.column(_intern_agg(agg)))
+        agg_select.set("having", having_copy)
 
     # Build the new outer SELECT — replaces FROM with the agg CTE,
     # drops JOINs / WHERE / GROUP BY / HAVING (all moved up into
@@ -2921,6 +2935,13 @@ def extract_aggregation_cte(
             col.set("table", None)
     order = target.args.get("order")
     if order is not None:
+        # Rewrite top-level aggregates in ORDER BY to the agg-CTE
+        # column alias (so e.g. ``ORDER BY SUM(amount) DESC`` reads as
+        # ``ORDER BY amount_sum DESC`` against the agg CTE).
+        for agg in list(order.find_all(exp.AggFunc)):
+            if not _agg_is_top_level(agg, order):
+                continue
+            agg.replace(exp.column(_intern_agg(agg)))
         for col in order.find_all(exp.Column):
             col.set("table", None)
     qualify = target.args.get("qualify")
@@ -4027,7 +4048,98 @@ def apply_auto_fixes(
     except sqlglot.errors.ParseError:
         pass
 
+    # Annotate every CTE in the rendered output with a one-line
+    # functional-role comment derived from its name suffix. Operates
+    # textually on the pretty-printed SQL because sqlglot's renderer
+    # doesn't preserve free-form comments between CTEs reliably.
+    if not detection_only:
+        out = _annotate_ctes_with_roles(out, entity_hint)
+
     return out, findings, log
+
+
+# Map from CTE-name suffix to the one-line role comment that
+# describes that CTE's single concern. Order matters: longer suffixes
+# checked first.
+_CTE_ROLE_BY_SUFFIX: List[Tuple[str, str]] = [
+    ("_aggregated", "Aggregated: GROUP BY + aggregates + HAVING (no JOIN, no derivation, no WHERE)"),
+    ("_deduped",    "Deduped: filters WHERE rn = 1 (removes duplicates surfaced by the ranked CTE above)"),
+    ("_ranked",     "Ranked: ROW_NUMBER() OVER (PARTITION BY all projection columns) — replaces SELECT DISTINCT, makes duplicates inspectable"),
+    ("_joined",     "Joined: JOINs + multi-source derivations only (no WHERE, no aggregation)"),
+    ("_filtered",   "Source filter: single-table SELECT + WHERE for one source"),
+    ("_prepared",   "Source prep: single-table SELECT + renames + single-source value transforms"),
+]
+
+
+def _cte_role_comment(cte_name: str, entity_hint: str) -> Optional[str]:
+    """Return the one-line role comment for a CTE name, or ``None``
+    when no rule matches.
+
+    Disambiguates entity-level ``<entity>_filtered`` (cross-source
+    filter CTE) from source-level ``<table>_filtered`` (single-source
+    pushdown CTE) by checking whether the prefix matches the
+    file's entity hint.
+    """
+    if entity_hint and cte_name == f"{entity_hint}_filtered":
+        return "Filtered: cross-source WHERE predicates (no JOIN, no derivation, no aggregation)"
+    for suffix, role in _CTE_ROLE_BY_SUFFIX:
+        if cte_name.endswith(suffix):
+            return role
+    # UNION-branch CTEs: ``<entity>_<n>`` numeric suffix or a literal
+    # tag like ``loan_loss_allowance`` / ``web`` / ``store``.
+    if entity_hint:
+        # Pattern: <entity>_<digit>+
+        m = re.match(rf"^{re.escape(entity_hint)}_(\d+)$", cte_name)
+        if m:
+            return f"Branch CTE: UNION ALL branch #{m.group(1)} (fully layered internally)"
+    # Other CTEs not matching a known suffix: probably a user-defined
+    # CTE — don't comment.
+    return None
+
+
+# Lazy import to keep the regex compile out of module-level cost when
+# the comment pass is disabled. The pattern matches lines like
+# ``WITH foo AS (`` or ``), foo AS (`` at any indentation.
+_CTE_DECL_RE = re.compile(
+    r"^(?P<indent>[ \t]*)(?P<prefix>(?:WITH\s+|\)\s*,\s*))(?P<name>[A-Za-z_][A-Za-z0-9_]*)\s+AS\s+\(",
+    re.MULTILINE,
+)
+
+
+def _annotate_ctes_with_roles(sql: str, entity_hint: str) -> str:
+    """Insert a one-line ``-- Role: ...`` comment above every CTE
+    declaration in the rendered SQL. Comments are derived from each
+    CTE's name suffix (see ``_CTE_ROLE_BY_SUFFIX``).
+
+    The pass is text-level (regex-based) because sqlglot's pretty
+    printer doesn't preserve free-form comments between CTEs reliably.
+    Fail-soft: any error returns the SQL unchanged.
+    """
+    if not sql:
+        return sql
+    try:
+        def _annotate(match: re.Match) -> str:
+            indent = match.group("indent")
+            prefix = match.group("prefix")
+            name = match.group("name")
+            role = _cte_role_comment(name, entity_hint)
+            if role is None:
+                return match.group(0)
+            # ``WITH foo AS (`` keeps WITH on its own preceding line
+            # of indent — emit the comment on the line before WITH.
+            # ``), foo AS (`` emits the comment on its own line
+            # between the previous ``)`` and the comma.
+            if prefix.strip().startswith("WITH"):
+                # Place comment ABOVE the WITH keyword. sqlglot
+                # always emits WITH at column 0, so prepend.
+                return f"{indent}-- {role}\n{match.group(0)}"
+            # ``), foo AS (`` — comment goes between the previous
+            # ``)`` and this declaration. Split: keep the `)`, then
+            # newline, then comment, then `, foo AS (`.
+            return f")\n{indent}-- {role}\n{indent}, {name} AS ("
+        return _CTE_DECL_RE.sub(_annotate, sql)
+    except Exception:  # noqa: BLE001 — fail-soft
+        return sql
 
 
 # Heuristic markers for "banner" comments: multi-line block comments
@@ -4554,23 +4666,26 @@ class MovementConfig:
 
 @dataclass
 class CustomerRuleConfig:
-    """Customer-overridable values for the migration rule pack."""
+    """Customer-overridable values for the migration rule pack.
+
+    Defaults are deliberately MINIMAL — only the SCD2 / change-tracking
+    columns that are broadly applicable across data warehouses.
+    Site-specific columns (file_delivery_entity, xsd_version, …) live
+    only in ``sql_process.config.yaml`` so that running with a
+    different YAML (or ``--config none``) doesn't silently pollute the
+    metadata blacklist.
+    """
     legacy_schemas: List[str] = field(default_factory=list)
     replacement_schema: str = "automatically_inferred_qualifier"
     date_variable: str = "process_date"
     metadata_blacklist: List[str] = field(default_factory=lambda: [
-        # SCD2 / change-tracking metadata
+        # SCD2 / change-tracking metadata only. Add site-specific
+        # columns via YAML.
         "snapshot_date", "insert_dts", "update_dts",
         "current_flag", "delete_flag", "delta_flag",
         "create_timestamp", "start_dts", "end_dts",
-        # File-delivery / reporting envelope metadata (customer site)
-        "file_delivery_entity", "delivery_set", "file_reporting_date",
-        "period_version", "file_reporting_period", "xsd_version",
-        "redelivery_number",
     ])
-    obsolete_cte_names: List[str] = field(default_factory=lambda: [
-        "extract_dates", "create_timeline", "finalize_timeline",
-    ])
+    obsolete_cte_names: List[str] = field(default_factory=list)
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -4624,6 +4739,19 @@ class FileConfig:
 
 
 @dataclass
+class RunConfig:
+    """Where to read inputs from and where to write outputs.
+
+    Lets a customer drive a full pipeline run from a single YAML
+    rather than passing input/output/recursive on the command line
+    every time. CLI flags override these when supplied.
+    """
+    input_dir: Optional[Path] = None
+    output_dir: Optional[Path] = None
+    recursive: bool = False
+
+
+@dataclass
 class PipelineConfig:
     """Top-level container for all configurable values.
 
@@ -4635,6 +4763,7 @@ class PipelineConfig:
     outputs: OutputConfig = field(default_factory=OutputConfig)
     optimize: OptimizeConfig = field(default_factory=OptimizeConfig)
     files: FileConfig = field(default_factory=FileConfig)
+    run: RunConfig = field(default_factory=RunConfig)
 
 
 def load_config(path: Optional[Path]) -> PipelineConfig:
@@ -4678,12 +4807,24 @@ def load_config(path: Optional[Path]) -> PipelineConfig:
 
     rl = raw.get("rules") or {}
     if rl:
+        # Use ``is None`` (not ``or``) when reading list-valued keys so
+        # an explicit empty list in the YAML is honoured. ``or`` falls
+        # back to the dataclass defaults on falsy values, which made
+        # ``metadata_blacklist: []`` silently re-introduce the
+        # hardcoded defaults.
+        mb_raw = rl.get("metadata_blacklist")
+        ob_raw = rl.get("obsolete_cte_names")
+        ls_raw = rl.get("legacy_schemas")
         cfg.rules = CustomerRuleConfig(
-            legacy_schemas=list(rl.get("legacy_schemas") or []),
+            legacy_schemas=list(ls_raw) if ls_raw is not None else [],
             replacement_schema=str(rl.get("replacement_schema", cfg.rules.replacement_schema)),
             date_variable=str(rl.get("date_variable", cfg.rules.date_variable)),
-            metadata_blacklist=list(rl.get("metadata_blacklist") or cfg.rules.metadata_blacklist),
-            obsolete_cte_names=list(rl.get("obsolete_cte_names") or cfg.rules.obsolete_cte_names),
+            metadata_blacklist=(
+                list(mb_raw) if mb_raw is not None else list(cfg.rules.metadata_blacklist)
+            ),
+            obsolete_cte_names=(
+                list(ob_raw) if ob_raw is not None else list(cfg.rules.obsolete_cte_names)
+            ),
         )
 
     outs = raw.get("outputs") or {}
@@ -4706,6 +4847,14 @@ def load_config(path: Optional[Path]) -> PipelineConfig:
         cfg.files = FileConfig(
             include=list(fl.get("include") or []),
             exclude=list(fl.get("exclude") or []),
+        )
+
+    rn = raw.get("run") or {}
+    if rn:
+        cfg.run = RunConfig(
+            input_dir=Path(rn["input_dir"]) if rn.get("input_dir") else None,
+            output_dir=Path(rn["output_dir"]) if rn.get("output_dir") else None,
+            recursive=bool(rn.get("recursive", False)),
         )
 
     return cfg
@@ -5917,19 +6066,31 @@ def main(argv: Optional[List[str]] = None) -> int:
     parser.add_argument(
         "input_dir",
         type=Path,
-        help="Folder containing *.sql files",
+        nargs="?",  # Optional — fall back to run.input_dir from YAML.
+        default=None,
+        help=(
+            "Folder containing *.sql files. Optional when "
+            "`run.input_dir` is set in the YAML config."
+        ),
     )
     parser.add_argument(
         "--out",
         dest="output_dir",
         type=Path,
-        default=Path("output"),
-        help="Output folder (default: ./output)",
+        default=None,
+        help=(
+            "Output folder. Optional when `run.output_dir` is set in "
+            "the YAML config; defaults to ./output otherwise."
+        ),
     )
     parser.add_argument(
         "-r", "--recursive",
         action="store_true",
-        help="Recurse into subdirectories (default: top-level only)",
+        default=None,  # None = not specified; fall back to YAML.
+        help=(
+            "Recurse into subdirectories. When omitted, falls back to "
+            "`run.recursive` from the YAML config (default: top-level only)."
+        ),
     )
     parser.add_argument(
         "--config",
@@ -5991,17 +6152,37 @@ def main(argv: Optional[List[str]] = None) -> int:
     )
     args = parser.parse_args(argv)
 
-    if not args.input_dir.is_dir():
-        print(f"Input folder not found: {args.input_dir}", file=sys.stderr)
-        return 2
-
-    # Load YAML config.
+    # Load YAML config FIRST so its `run` section can supply
+    # input_dir / output_dir / recursive when the CLI omits them.
     if args.config and args.config.lower() == "none":
         cfg = PipelineConfig()
     elif args.config:
         cfg = load_config(Path(args.config))
     else:
         cfg = load_config(None)
+
+    # Resolve run-time paths. CLI > YAML > default.
+    input_dir: Optional[Path] = args.input_dir or cfg.run.input_dir
+    if input_dir is None:
+        print(
+            "No input directory: pass one as positional arg or set "
+            "`run.input_dir` in the YAML config.",
+            file=sys.stderr,
+        )
+        return 2
+    if not input_dir.is_dir():
+        print(f"Input folder not found: {input_dir}", file=sys.stderr)
+        return 2
+
+    output_dir: Path = (
+        args.output_dir if args.output_dir is not None
+        else cfg.run.output_dir if cfg.run.output_dir is not None
+        else Path("output")
+    )
+    recursive: bool = (
+        args.recursive if args.recursive is not None
+        else cfg.run.recursive
+    )
 
     # Apply CLI overrides (only when explicitly passed).
     def _split_csv(value: str) -> List[str]:
@@ -6025,9 +6206,9 @@ def main(argv: Optional[List[str]] = None) -> int:
         cfg.optimize.table_qualifier = args.table_qualifier or None
 
     n = process_folder(
-        args.input_dir,
-        args.output_dir,
-        args.recursive,
+        input_dir,
+        output_dir,
+        recursive,
         metadata_path=args.metadata,
         diff_against=args.diff_against,
         movement_config=cfg.movement,
@@ -6048,7 +6229,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     if cfg.outputs.annotation_entity:
         optional_outputs.append("annotation.entity.yaml")
 
-    print(f"Processed {n} file(s) -> {args.output_dir}")
+    print(f"Processed {n} file(s) -> {output_dir}")
     print(f"  {n} per-query folder(s) — each with:")
     print(f"      optimized.sql, genie.md, findings.md, movement.csv")
     if optional_outputs:

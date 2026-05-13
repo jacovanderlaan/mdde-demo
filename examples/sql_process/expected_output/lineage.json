@@ -2332,6 +2332,87 @@
       "schemaURL": "https://openlineage.io/spec/2-0-2/OpenLineage.json#/definitions/RunEvent",
       "job": {
         "namespace": "mdde-demo.sql_process",
+        "name": "order_by_aggregate"
+      },
+      "inputs": [
+        {
+          "namespace": "mdde-demo.sql_process",
+          "name": "raw.customer"
+        },
+        {
+          "namespace": "mdde-demo.sql_process",
+          "name": "raw.orders"
+        }
+      ],
+      "outputs": [
+        {
+          "namespace": "mdde-demo.sql_process",
+          "name": "order_by_aggregate",
+          "facets": {
+            "schema": {
+              "fields": [
+                {
+                  "name": "customer_id",
+                  "type": "INFERRED"
+                },
+                {
+                  "name": "country",
+                  "type": "INFERRED"
+                },
+                {
+                  "name": "total_revenue",
+                  "type": "INFERRED"
+                },
+                {
+                  "name": "order_count",
+                  "type": "INFERRED"
+                }
+              ]
+            },
+            "columnLineage": {
+              "fields": {
+                "customer_id": {
+                  "inputFields": [
+                    {
+                      "namespace": "mdde-demo.sql_process",
+                      "name": "c",
+                      "field": "customer_id"
+                    }
+                  ]
+                },
+                "country": {
+                  "inputFields": [
+                    {
+                      "namespace": "mdde-demo.sql_process",
+                      "name": "c",
+                      "field": "country"
+                    }
+                  ]
+                },
+                "total_revenue": {
+                  "inputFields": [
+                    {
+                      "namespace": "mdde-demo.sql_process",
+                      "name": "o",
+                      "field": "amount"
+                    }
+                  ]
+                },
+                "order_count": {
+                  "inputFields": []
+                }
+              }
+            }
+          }
+        }
+      ]
+    },
+    {
+      "eventType": "COMPLETE",
+      "producer": "mdde-demo://examples/sql_process",
+      "schemaURL": "https://openlineage.io/spec/2-0-2/OpenLineage.json#/definitions/RunEvent",
+      "job": {
+        "namespace": "mdde-demo.sql_process",
         "name": "ordered_top_customers"
       },
       "inputs": [

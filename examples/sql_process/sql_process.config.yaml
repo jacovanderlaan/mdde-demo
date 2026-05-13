@@ -127,3 +127,22 @@ files:
   #   Example:
   #     - "**/_*.sql"        # skip files starting with underscore
   #     - "**/scratch/**"    # skip scratch folder
+
+
+# =============================================================================
+# Run defaults (input/output/recursive)
+# =============================================================================
+#
+# When set here, the CLI doesn't need to be told. CLI flags still take
+# precedence: `python sql_process.py /some/dir --out other/` overrides
+# whatever's below. Leave any of these unset to fall back to the CLI
+# argument (and to ./output / non-recursive for output / recursive).
+#
+# Useful when a customer wants the full run driven by a single YAML
+# they can hand off:
+#     python sql_process.py --config customer.config.yaml
+
+run:
+  input_dir: null    # e.g.,  /path/to/sql/folder
+  output_dir: null   # e.g.,  /path/to/output
+  recursive: false

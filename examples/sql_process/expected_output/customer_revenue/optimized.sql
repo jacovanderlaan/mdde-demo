@@ -18,6 +18,7 @@ Validation Checklist:
 
 /* @mdde-entity: customer_revenue_clean */ /* @mdde-layer: business */ /* @mdde-stereotype: fact */ /* @mdde-description: Customer revenue rollup — well-formed reference target */
 CREATE OR REPLACE VIEW customer_revenue_clean AS
+-- Source prep: single-table SELECT + renames + single-source value transforms
 WITH stg_customers_prepared AS (
   SELECT
     customer_id, /* @pk @business_key */
@@ -43,7 +44,9 @@ WITH stg_customers_prepared AS (
   FROM shipped_orders
   GROUP BY
     customer_id
-), customer_revenue_clean_joined AS (
+)
+-- Joined: JOINs + multi-source derivations only (no WHERE, no aggregation)
+, customer_revenue_clean_joined AS (
   SELECT
     customer_id,
     email,

@@ -44,7 +44,9 @@ WITH cust AS (
   FROM schema_identifier_ssf_snapshot.loans
   WHERE
     status = 'OPEN' AND principal_amount > 0
-), combo_ssf_loan_aggregates_joined AS (
+)
+-- Joined: JOINs + multi-source derivations only (no WHERE, no aggregation)
+, combo_ssf_loan_aggregates_joined AS (
   SELECT
     customer_id,
     country_code,
@@ -56,7 +58,9 @@ WITH cust AS (
   FROM cust AS c
   INNER JOIN loans AS l
     ON l.customer_id = c.customer_id
-), combo_ssf_loan_aggregates_aggregated AS (
+)
+-- Aggregated: GROUP BY + aggregates + HAVING (no JOIN, no derivation, no WHERE)
+, combo_ssf_loan_aggregates_aggregated AS (
   SELECT
     customer_id,
     country_code,
@@ -72,7 +76,7 @@ WITH cust AS (
     country,
     email
   HAVING
-    SUM(principal_amount) > 0
+    principal_amount_sum > 0
 )
 SELECT
   customer_id,

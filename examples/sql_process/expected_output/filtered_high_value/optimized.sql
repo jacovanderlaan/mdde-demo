@@ -23,12 +23,15 @@ Validation Checklist:
 - [X] Table qualifiers normalised.
 */
 
+-- Source prep: single-table SELECT + renames + single-source value transforms
 WITH customer_prepared AS (
   SELECT
     customer_id AS customer_id,
     country AS country
   FROM schema_identifier_ssf_snapshot.customer
-), orders_filtered AS (
+)
+-- Source filter: single-table SELECT + WHERE for one source
+, orders_filtered AS (
   SELECT
     order_date AS order_date,
     amount AS amount,
@@ -37,7 +40,9 @@ WITH customer_prepared AS (
   FROM schema_identifier_ssf_snapshot.orders
   WHERE
     amount > 100
-), filtered_high_value_joined AS (
+)
+-- Joined: JOINs + multi-source derivations only (no WHERE, no aggregation)
+, filtered_high_value_joined AS (
   SELECT
     customer_id,
     country,
@@ -47,7 +52,9 @@ WITH customer_prepared AS (
   FROM customer_prepared AS c
   INNER JOIN orders_filtered AS o
     ON o.customer_id = c.customer_id
-), filtered_high_value_filtered AS (
+)
+-- Filtered: cross-source WHERE predicates (no JOIN, no derivation, no aggregation)
+, filtered_high_value_filtered AS (
   SELECT
     *
   FROM filtered_high_value_joined

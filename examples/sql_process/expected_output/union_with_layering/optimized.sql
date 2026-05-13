@@ -23,26 +23,33 @@ Validation Checklist:
 */
 
 WITH web AS (
+  -- Source prep: single-table SELECT + renames + single-source value transforms
   WITH customer_prepared AS (
     SELECT
       country AS country,
       customer_id
     FROM schema_identifier_ssf_snapshot.customer
-  ), orders_filtered AS (
+)
+  -- Source filter: single-table SELECT + WHERE for one source
+  , orders_filtered AS (
     SELECT
       amount,
       customer_id
     FROM schema_identifier_ssf_snapshot.orders
     WHERE
       channel = 'WEB'
-  ), web_joined AS (
+)
+  -- Joined: JOINs + multi-source derivations only (no WHERE, no aggregation)
+  , web_joined AS (
     SELECT
       country,
       amount
     FROM customer_prepared AS c
     INNER JOIN orders_filtered AS o
       ON o.customer_id = c.customer_id
-  ), web_aggregated AS (
+)
+  -- Aggregated: GROUP BY + aggregates + HAVING (no JOIN, no derivation, no WHERE)
+  , web_aggregated AS (
     SELECT
       country,
       SUM(amount) AS amount_sum,
@@ -59,26 +66,33 @@ WITH web AS (
     'web' AS channel
   FROM web_aggregated
 ), store AS (
+  -- Source prep: single-table SELECT + renames + single-source value transforms
   WITH customer_prepared AS (
     SELECT
       country AS country,
       customer_id
     FROM schema_identifier_ssf_snapshot.customer
-  ), orders_filtered AS (
+)
+  -- Source filter: single-table SELECT + WHERE for one source
+  , orders_filtered AS (
     SELECT
       amount,
       customer_id
     FROM schema_identifier_ssf_snapshot.orders
     WHERE
       channel = 'STORE'
-  ), store_joined AS (
+)
+  -- Joined: JOINs + multi-source derivations only (no WHERE, no aggregation)
+  , store_joined AS (
     SELECT
       country,
       amount
     FROM customer_prepared AS c
     INNER JOIN orders_filtered AS o
       ON o.customer_id = c.customer_id
-  ), store_aggregated AS (
+)
+  -- Aggregated: GROUP BY + aggregates + HAVING (no JOIN, no derivation, no WHERE)
+  , store_aggregated AS (
     SELECT
       country,
       SUM(amount) AS amount_sum,

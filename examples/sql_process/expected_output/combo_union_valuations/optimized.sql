@@ -25,19 +25,24 @@ Validation Checklist:
 */
 
 WITH principal AS (
+  -- Source prep: single-table SELECT + renames + single-source value transforms
   WITH customer_prepared AS (
     SELECT
       customer_id AS customer_id,
       country AS country
     FROM schema_identifier_ssf_snapshot.customer
-  ), loans_filtered AS (
+)
+  -- Source filter: single-table SELECT + WHERE for one source
+  , loans_filtered AS (
     SELECT
       customer_id,
       principal_amount
     FROM schema_identifier_ssf_snapshot.loans
     WHERE
       status = 'OPEN'
-  ), principal_joined AS (
+)
+  -- Joined: JOINs + multi-source derivations only (no WHERE, no aggregation)
+  , principal_joined AS (
     SELECT
       customer_id,
       country,
@@ -45,7 +50,9 @@ WITH principal AS (
     FROM customer_prepared AS c
     INNER JOIN loans_filtered AS l
       ON l.customer_id = c.customer_id
-  ), principal_aggregated AS (
+)
+  -- Aggregated: GROUP BY + aggregates + HAVING (no JOIN, no derivation, no WHERE)
+  , principal_aggregated AS (
     SELECT
       customer_id,
       country,
@@ -56,7 +63,7 @@ WITH principal AS (
       customer_id,
       country
     HAVING
-      SUM(principal_amount) > 0
+      principal_amount_sum > 0
   )
   /* @mdde-entity: combo_union_valuations */ /* @mdde-layer: business */ /* @mdde-stereotype: fact_aggregate */ /* @mdde-description: Three-branch UNION ALL where each branch is its own */ /* aggregated rollup with JOINs, WHERE filters, formatting (CAST/CASE), and a */ /* literal tag column. Stresses: UNION-branch lifting + recursive per-branch */ /* layering (source / joined / filtered / aggregated / outer formatting INSIDE */ /* each branch CTE) + branch-name inference from `'X' AS valuation_type`. */
   SELECT
@@ -67,19 +74,24 @@ WITH principal AS (
     'principal' AS valuation_type
   FROM principal_aggregated
 ), revenue AS (
+  -- Source prep: single-table SELECT + renames + single-source value transforms
   WITH customer_prepared AS (
     SELECT
       customer_id AS customer_id,
       country AS country
     FROM schema_identifier_ssf_snapshot.customer
-  ), orders_filtered AS (
+)
+  -- Source filter: single-table SELECT + WHERE for one source
+  , orders_filtered AS (
     SELECT
       amount,
       customer_id
     FROM schema_identifier_ssf_snapshot.orders
     WHERE
       amount > 0
-  ), revenue_joined AS (
+)
+  -- Joined: JOINs + multi-source derivations only (no WHERE, no aggregation)
+  , revenue_joined AS (
     SELECT
       customer_id,
       country,
@@ -87,7 +99,9 @@ WITH principal AS (
     FROM customer_prepared AS c
     INNER JOIN orders_filtered AS o
       ON o.customer_id = c.customer_id
-  ), revenue_aggregated AS (
+)
+  -- Aggregated: GROUP BY + aggregates + HAVING (no JOIN, no derivation, no WHERE)
+  , revenue_aggregated AS (
     SELECT
       customer_id,
       country,
@@ -98,7 +112,7 @@ WITH principal AS (
       customer_id,
       country
     HAVING
-      SUM(amount) > 0
+      amount_sum > 0
   )
   SELECT
     customer_id,
@@ -108,12 +122,15 @@ WITH principal AS (
     'revenue' AS valuation_type
   FROM revenue_aggregated
 ), active_days AS (
+  -- Source prep: single-table SELECT + renames + single-source value transforms
   WITH customer_prepared AS (
     SELECT
       customer_id AS customer_id,
       country AS country
     FROM schema_identifier_ssf_snapshot.customer
-  ), active_days_joined AS (
+)
+  -- Joined: JOINs + multi-source derivations only (no WHERE, no aggregation)
+  , active_days_joined AS (
     SELECT
       customer_id,
       country,
@@ -121,7 +138,9 @@ WITH principal AS (
     FROM customer_prepared AS c
     INNER JOIN schema_identifier_ssf_snapshot.orders AS o
       ON o.customer_id = c.customer_id
-  ), active_days_aggregated AS (
+)
+  -- Aggregated: GROUP BY + aggregates + HAVING (no JOIN, no derivation, no WHERE)
+  , active_days_aggregated AS (
     SELECT
       customer_id,
       country,

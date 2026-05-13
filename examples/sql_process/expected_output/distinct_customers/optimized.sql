@@ -18,6 +18,7 @@ Validation Checklist:
 - [X] Table qualifiers normalised.
 */
 
+-- Ranked: ROW_NUMBER() OVER (PARTITION BY all projection columns) — replaces SELECT DISTINCT, makes duplicates inspectable
 WITH distinct_customers_ranked AS (
   /* @mdde-entity: distinct_customers */ /* @mdde-layer: business */ /* @mdde-stereotype: dim */ /* @mdde-description: SELECT DISTINCT to deduplicate customers by email domain. */ /* Exercises DISTINCT handling: the keyword must survive the layering passes */ /* intact so the outer SELECT still de-dupes. */
   SELECT
@@ -34,7 +35,9 @@ WITH distinct_customers_ranked AS (
   FROM schema_identifier_ssf_snapshot.customer AS c
   WHERE
     NOT c.email IS NULL
-), distinct_customers_deduped AS (
+)
+-- Deduped: filters WHERE rn = 1 (removes duplicates surfaced by the ranked CTE above)
+, distinct_customers_deduped AS (
   SELECT
     customer_id,
     email,

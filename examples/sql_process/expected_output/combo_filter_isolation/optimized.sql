@@ -27,6 +27,7 @@ Validation Checklist:
 - [X] Table qualifiers normalised.
 */
 
+-- Source filter: single-table SELECT + WHERE for one source
 WITH customer_filtered AS (
   SELECT
     customer_id AS customer_id,
@@ -35,7 +36,9 @@ WITH customer_filtered AS (
   FROM schema_identifier_ssf_snapshot.customer
   WHERE
     NOT country IS NULL /* single-source customer */
-), orders_filtered AS (
+)
+-- Source filter: single-table SELECT + WHERE for one source
+, orders_filtered AS (
   SELECT
     amount AS amount,
     order_date AS order_date,
@@ -44,7 +47,9 @@ WITH customer_filtered AS (
   FROM schema_identifier_ssf_snapshot.orders
   WHERE
     amount > 0 /* single-source orders */
-), loans_filtered AS (
+)
+-- Source filter: single-table SELECT + WHERE for one source
+, loans_filtered AS (
   SELECT
     principal_amount AS loan_principal,
     status AS loan_status,
@@ -53,7 +58,9 @@ WITH customer_filtered AS (
   FROM schema_identifier_ssf_snapshot.loans
   WHERE
     status = 'OPEN' /* single-source loans */
-), combo_filter_isolation_joined AS (
+)
+-- Joined: JOINs + multi-source derivations only (no WHERE, no aggregation)
+, combo_filter_isolation_joined AS (
   SELECT
     customer_id,
     country,
@@ -69,7 +76,9 @@ WITH customer_filtered AS (
     ON o.customer_id = c.customer_id
   INNER JOIN loans_filtered AS l
     ON l.customer_id = c.customer_id
-), combo_filter_isolation_filtered AS (
+)
+-- Filtered: cross-source WHERE predicates (no JOIN, no derivation, no aggregation)
+, combo_filter_isolation_filtered AS (
   SELECT
     *
   FROM combo_filter_isolation_joined

@@ -21,6 +21,7 @@ Validation Checklist:
 - [X] Table qualifiers normalised.
 */
 
+-- Source filter: single-table SELECT + WHERE for one source
 WITH customer_filtered AS (
   SELECT
     customer_id AS customer_id,
@@ -28,7 +29,9 @@ WITH customer_filtered AS (
   FROM schema_identifier_ssf_snapshot.customer
   WHERE
     NOT email IS NULL
-), lateral_unnest_joined AS (
+)
+-- Joined: JOINs + multi-source derivations only (no WHERE, no aggregation)
+, lateral_unnest_joined AS (
   SELECT
     customer_id,
     email,

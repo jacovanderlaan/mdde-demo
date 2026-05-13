@@ -29,6 +29,7 @@ Validation Checklist:
 
 /* @mdde-entity: customer_subqueries */ /* @mdde-layer: business */ /* @mdde-stereotype: fact */ /* @mdde-description: Subquery shapes that should be lifted to CTEs (plus two that should be left inline) */ /* Planted shapes: */ /*   1. Derived table in FROM        -> lift (alias 'recent_orders') */ /*   2. Derived table in JOIN        -> lift (alias 'order_totals') */ /*   3. Scalar subquery in SELECT    -> lift (uncorrelated) */ /*   4. WHERE IN (SELECT ...)        -> lift (inner SELECT goes to a CTE; outer keeps the IN against the CTE) */ /*   5. Correlated subquery in SELECT-> SKIP (correlated scalar subquery in projection — still inline) */
 CREATE OR REPLACE VIEW customer_subqueries AS
+-- Source prep: single-table SELECT + renames + single-source value transforms
 WITH stg_customers_prepared AS (
   SELECT
     customer_id, /* @pk @business_key */
@@ -61,7 +62,9 @@ WITH stg_customers_prepared AS (
   FROM raw_orders
   WHERE
     order_status = 'SHIPPED'
-), customer_subqueries_joined AS (
+)
+-- Joined: JOINs + multi-source derivations only (no WHERE, no aggregation)
+, customer_subqueries_joined AS (
   SELECT
     customer_id,
     email,
@@ -74,7 +77,9 @@ WITH stg_customers_prepared AS (
     ON r.customer_id = c.customer_id
   LEFT JOIN t
     ON t.customer_id = c.customer_id
-), customer_subqueries_filtered AS (
+)
+-- Filtered: cross-source WHERE predicates (no JOIN, no derivation, no aggregation)
+, customer_subqueries_filtered AS (
   SELECT
     *
   FROM customer_subqueries_joined

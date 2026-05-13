@@ -19,6 +19,7 @@ Validation Checklist:
 */
 
 WITH web AS (
+  -- Source filter: single-table SELECT + WHERE for one source
   WITH orders_filtered AS (
     SELECT
       customer_id AS customer_id,
@@ -36,6 +37,7 @@ WITH web AS (
     'web' AS channel
   FROM orders_filtered AS o
 ), store AS (
+  -- Source filter: single-table SELECT + WHERE for one source
   WITH orders_filtered AS (
     SELECT
       customer_id AS customer_id,

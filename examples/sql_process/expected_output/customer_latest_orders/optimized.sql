@@ -18,6 +18,7 @@ Validation Checklist:
 
 /* @mdde-entity: customer_latest_orders */ /* @mdde-layer: business */ /* @mdde-stereotype: fact_dedup */ /* @mdde-description: Per-customer latest order via window dedup (QUALIFY pattern) */
 CREATE OR REPLACE VIEW customer_latest_orders AS
+-- Source prep: single-table SELECT + renames + single-source value transforms
 WITH stg_customers_prepared AS (
   SELECT
     customer_id, /* @pk @business_key */
@@ -44,7 +45,9 @@ WITH stg_customers_prepared AS (
   FROM ordered_orders
   WHERE
     recency_rank = 1
-), customer_latest_orders_joined AS (
+)
+-- Joined: JOINs + multi-source derivations only (no WHERE, no aggregation)
+, customer_latest_orders_joined AS (
   SELECT
     customer_id,
     email,

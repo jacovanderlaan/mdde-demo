@@ -1,6 +1,6 @@
 # sql_process — run report
 
-Files processed: **33**
+Files processed: **34**
 
 ## Files
 
@@ -27,6 +27,7 @@ Files processed: **33**
 | `having_top_spenders.sql` | having_top_spenders | business | yes | 0 | 2 | 4 | 3 |
 | `lateral_unnest.sql` | lateral_unnest | business | yes | 0 | 2 | 4 | 4 |
 | `nested_union_except.sql` | nested_union_except | business | yes | 0 | 2 | 2 | 9 |
+| `order_by_aggregate.sql` | order_by_aggregate | business | yes | 0 | 2 | 4 | 3 |
 | `ordered_top_customers.sql` | ordered_top_customers | business | yes | 0 | 2 | 4 | 1 |
 | `passthrough_with_loans.sql` | passthrough_with_loans | business | yes | 2 | 2 | 6 | 6 |
 | `predicate_subqueries.sql` | predicate_subqueries | business | yes | 0 | 3 | 3 | 3 |
@@ -42,7 +43,7 @@ Files processed: **33**
 
 ## Quality findings
 
-**Total:** 191 (error=6, warning=54, info=131)  
+**Total:** 194 (error=6, warning=56, info=132)  
 **Auto-fixed:** 4
 
 | File | Location | Rule | Severity | Auto-fixed | Message |
@@ -185,6 +186,9 @@ Files processed: **33**
 | `nested_union_except.sql` | <file> | INLINE_UNION_TRANSFORM | warning | no | WHERE clause inside UNION ALL branch |
 | `nested_union_except.sql` | <file> | INLINE_UNION_TRANSFORM | warning | no | WHERE clause inside UNION ALL branch |
 | `nested_union_except.sql` | <file> | MISSING_SOURCE_VERSION | info | no | Filename 'nested_union_except.sql' has fewer than 3 hyphen-separated parts; m... |
+| `order_by_aggregate.sql` | <file> | SELECT_STAR | warning | no | SELECT * detected - explicit column list recommended |
+| `order_by_aggregate.sql` | <file> | SELECT_STAR | warning | no | SELECT * detected - explicit column list recommended |
+| `order_by_aggregate.sql` | <file> | MISSING_SOURCE_VERSION | info | no | Filename 'order_by_aggregate.sql' has fewer than 3 hyphen-separated parts; mo... |
 | `ordered_top_customers.sql` | <file> | MISSING_SOURCE_VERSION | info | no | Filename 'ordered_top_customers.sql' has fewer than 3 hyphen-separated parts;... |
 | `passthrough_with_loans.sql` | <file> | SELECT_STAR | warning | no | SELECT * detected - explicit column list recommended |
 | `passthrough_with_loans.sql` | <file> | SELECT_STAR | warning | no | SELECT * detected - explicit column list recommended |
@@ -241,7 +245,7 @@ Files processed: **33**
 
 ## Mapping coverage
 
-**178/194** output columns have a resolved source attribute (92%)
+**181/198** output columns have a resolved source attribute (91%)
 
 ## Cross-file lineage
 
@@ -292,6 +296,7 @@ flowchart LR
     having_top_spenders["having_top_spenders<br/><i>having_top_spenders.sql</i>"]
     lateral_unnest["lateral_unnest<br/><i>lateral_unnest.sql</i>"]
     nested_union_except["nested_union_except<br/><i>nested_union_except.sql</i>"]
+    order_by_aggregate["order_by_aggregate<br/><i>order_by_aggregate.sql</i>"]
     ordered_top_customers["ordered_top_customers<br/><i>ordered_top_customers.sql</i>"]
     passthrough_with_loans["passthrough_with_loans<br/><i>passthrough_with_loans.sql</i>"]
     predicate_subqueries["predicate_subqueries<br/><i>predicate_subqueries.sql</i>"]
@@ -338,6 +343,7 @@ flowchart LR
   ext_raw_customer --> having_top_spenders
   ext_raw_customer --> lateral_unnest
   ext_raw_customer --> nested_union_except
+  ext_raw_customer --> order_by_aggregate
   ext_raw_customer --> ordered_top_customers
   ext_raw_customer --> passthrough_with_loans
   ext_raw_customer --> predicate_subqueries
@@ -365,6 +371,7 @@ flowchart LR
   ext_raw_orders --> having_top_spenders
   ext_raw_orders --> lateral_unnest
   ext_raw_orders --> nested_union_except
+  ext_raw_orders --> order_by_aggregate
   ext_raw_orders --> ordered_top_customers
   ext_raw_orders --> predicate_subqueries
   ext_raw_orders --> source_derivations
@@ -399,6 +406,7 @@ flowchart LR
 | `having_top_spenders.sql` | having_top_spenders | 0 | — |
 | `lateral_unnest.sql` | lateral_unnest | 0 | — |
 | `nested_union_except.sql` | nested_union_except | 0 | — |
+| `order_by_aggregate.sql` | order_by_aggregate | 0 | — |
 | `ordered_top_customers.sql` | ordered_top_customers | 0 | — |
 | `passthrough_with_loans.sql` | passthrough_with_loans | 0 | — |
 | `predicate_subqueries.sql` | predicate_subqueries | 0 | — |

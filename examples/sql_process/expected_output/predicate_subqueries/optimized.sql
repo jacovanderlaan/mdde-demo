@@ -22,6 +22,7 @@ Validation Checklist:
 - [X] Table qualifiers normalised.
 */
 
+-- Source prep: single-table SELECT + renames + single-source value transforms
 WITH customer_prepared AS (
   SELECT
     customer_id AS customer_id,

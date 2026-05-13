@@ -22,13 +22,16 @@ Validation Checklist:
 - [X] Table qualifiers normalised.
 */
 
+-- Source prep: single-table SELECT + renames + single-source value transforms
 WITH customer_prepared AS (
   SELECT
     customer_id AS customer_id,
     email AS email,
     country AS country
   FROM schema_identifier_ssf_snapshot.customer
-), agg_customer_summary_joined AS (
+)
+-- Joined: JOINs + multi-source derivations only (no WHERE, no aggregation)
+, agg_customer_summary_joined AS (
   SELECT
     customer_id,
     email,
@@ -38,7 +41,9 @@ WITH customer_prepared AS (
   FROM customer_prepared AS c
   LEFT JOIN schema_identifier_ssf_snapshot.orders AS o
     ON o.customer_id = c.customer_id
-), agg_customer_summary_aggregated AS (
+)
+-- Aggregated: GROUP BY + aggregates + HAVING (no JOIN, no derivation, no WHERE)
+, agg_customer_summary_aggregated AS (
   SELECT
     customer_id,
     email,
