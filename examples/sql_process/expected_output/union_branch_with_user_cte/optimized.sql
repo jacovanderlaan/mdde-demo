@@ -18,8 +18,13 @@ Validation Checklist:
 - [X] Table qualifiers normalised.
 */
 
-WITH web AS (
-  /* @mdde-entity: union_branch_with_user_cte */ /* @mdde-layer: business */ /* @mdde-stereotype: fact */ /* @mdde-description: UNION ALL where ONE branch has its own user-defined WITH */ /* clause. Verifies recursive per-branch layering doesn't clobber the user's */ /* inner CTEs. */
+WITH orders AS (
+  /* @mdde-entity: union_branch_with_user_cte */
+  /* @mdde-layer: business */
+  /* @mdde-stereotype: fact */
+  /* @mdde-description: UNION ALL where ONE branch has its own user-defined WITH */
+  /* clause. Verifies recursive per-branch layering doesn't clobber the user's */
+  /* inner CTEs. */
   SELECT
     customer_id AS customer_id,
     amount AS amount,
@@ -27,7 +32,7 @@ WITH web AS (
   FROM schema_identifier_ssf_snapshot.orders
   WHERE
     channel = 'WEB'
-), recent AS (
+), recent_orders AS (
   WITH recent_orders AS (
     SELECT
       customer_id,
@@ -35,19 +40,26 @@ WITH web AS (
     FROM schema_identifier_ssf_snapshot.orders
     WHERE
       order_date >= '2024-01-01'
+)
+  -- Source filter: single-table SELECT + WHERE for one source
+  , recent_orders_filtered AS (
+    SELECT
+      customer_id AS customer_id,
+      amount AS amount
+    FROM recent_orders
+    WHERE
+      amount > 100
   )
   SELECT
-    ro.customer_id AS customer_id,
-    ro.amount AS amount,
+    ro.customer_id,
+    ro.amount,
     'recent' AS channel
-  FROM recent_orders AS ro
-  WHERE
-    ro.amount > 100
+  FROM recent_orders_filtered AS ro
 )
 SELECT
   *
-FROM web
+FROM orders
 UNION ALL
 SELECT
   *
-FROM recent
+FROM recent_orders

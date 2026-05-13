@@ -109,6 +109,24 @@ optimize:
   # Currently supports: "," (commas at the start of a SELECT line).
   union_separator: ","
 
+  # Per-rule toggles. Every transform defaults to true; set a key to
+  # false to skip it. Skipped rules ALSO drop out of the Genie
+  # instruction text so the prompt only lists what should be applied.
+  # enabled:
+  #   where_true_removed:        true   # WHERE 1=1 strip
+  #   schema_replacement:        true   # legacy_schemas → replacement
+  #   legacy_date_replacement:   true   # {reporting_date} → {process_date}
+  #   obsolete_cte_removal:      true   # drop CTEs in obsolete_cte_names
+  #   metadata_column_strip:     true   # exclude metadata_blacklist cols
+  #   subquery_lift:             true   # inline subquery → CTE
+  #   distinct_rewrite:          true   # DISTINCT → ROW_NUMBER + WHERE rn=1
+  #   source_pushdown:           true   # per-source <table>_prepared/_filtered
+  #   joined_cte:                true   # JOIN → <entity>_joined
+  #   filtered_cte:              true   # cross-source WHERE → <entity>_filtered
+  #   aggregation_cte:           true   # GROUP BY + agg → <entity>_aggregated
+  #   union_branch_lift:         true   # each UNION ALL branch → CTE
+  #   table_qualifier_rewrite:   true   # apply table_qualifier above
+
 
 # =============================================================================
 # File selection (recursive mode)

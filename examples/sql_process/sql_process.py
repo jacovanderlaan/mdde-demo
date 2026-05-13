@@ -922,8 +922,13 @@ def replace_distinct_with_rownum(
     if not projections:
         return sql, findings
 
-    ranked_name = f"{entity_hint}_ranked"
-    deduped_name = f"{entity_hint}_deduped"
+    # Prefer the FROM-table name (or first source) as the CTE
+    # prefix, so a `SELECT DISTINCT ... FROM customer` produces
+    # ``customer_ranked`` / ``customer_deduped`` rather than the
+    # generic file entity hint.
+    prefix = _cte_name_prefix(target, entity_hint)
+    ranked_name = f"{prefix}_ranked"
+    deduped_name = f"{prefix}_deduped"
 
     # Pick a unique rn column name in case the projection already
     # has a column called `rn`.
@@ -1813,7 +1818,17 @@ def push_projections_to_source_ctes(
                 sources.append((real_table.name, alias, real_table, name))
                 other_aliases.add(alias)
                 return
-            other_aliases.add(t.alias or name)
+            # Non-passthrough user-defined CTE. Treat it as a "table"
+            # source for pushdown: a sibling ``<cte_name>_prepared``
+            # CTE will be emitted between this CTE and the outer
+            # SELECT, capturing single-source projections/derivations
+            # that would otherwise leak into the joined CTE.
+            # The "table_name" we pass is the CTE name itself; the
+            # repoint step at apply-time will set the outer's FROM
+            # to ``<cte_name>_prepared``.
+            alias = t.alias or name
+            sources.append((name, alias, t, None))
+            other_aliases.add(alias)
             return
         alias = t.alias or name
         sources.append((name, alias, t, None))
@@ -2025,6 +2040,13 @@ def push_projections_to_source_ctes(
         source_table_node = plan.table_node.copy()
         source_table_node.set("alias", None)
         source_table_node.set("pivots", None)
+        # Strip the quoted-identifier flag on every Identifier inside
+        # the FROM. Customer SQL often uses ``FROM "my_table"`` even
+        # when the name doesn't need quoting; the rewrite should
+        # produce bare identifiers in the source CTE.
+        for ident in source_table_node.find_all(exp.Identifier):
+            if ident.args.get("quoted"):
+                ident.set("quoted", False)
         cte_select = exp.Select(expressions=cte_projections).from_(
             source_table_node
         )
@@ -2051,13 +2073,36 @@ def push_projections_to_source_ctes(
                 exp.TableAlias(this=exp.to_identifier(plan.alias)),
             )
 
-    # Merge new CTEs into the WITH clause (preserve existing order, new
-    # _proj CTEs sort first so they're declared before they're used).
+    # Merge new CTEs into the WITH clause. Order matters: each new
+    # ``_prepared`` / ``_filtered`` CTE must come AFTER any user-
+    # defined CTE it depends on. We insert each new CTE right after
+    # its dependency if it reads from one, otherwise prepend it.
     if existing_with:
-        existing_with.set(
-            "expressions",
-            new_ctes + list(existing_with.expressions),
-        )
+        cur = list(existing_with.expressions)
+        existing_names = {c.alias_or_name for c in cur}
+        for new_cte in new_ctes:
+            # Find the base name this CTE reads from.
+            body = new_cte.this
+            tables_in_body = (
+                [t.name for t in body.find_all(exp.Table) if t.name]
+                if hasattr(body, "find_all")
+                else []
+            )
+            dep_name = next(
+                (n for n in tables_in_body if n in existing_names),
+                None,
+            )
+            if dep_name is None:
+                # No dependency on a user CTE — declare first.
+                cur = [new_cte] + cur
+                continue
+            # Insert right after the dependency.
+            idx = next(
+                i for i, c in enumerate(cur) if c.alias_or_name == dep_name
+            )
+            cur.insert(idx + 1, new_cte)
+            existing_names.add(new_cte.alias_or_name)
+        existing_with.set("expressions", cur)
     else:
         target.set("with_", exp.With(expressions=new_ctes, recursive=False))
 
@@ -2230,6 +2275,45 @@ def _is_non_cast_derivation(proj: exp.Expression) -> bool:
     return True
 
 
+def _from_table_name(target: exp.Select) -> Optional[str]:
+    """Return the bare name of the FIRST source table in the outer
+    SELECT's FROM clause (without qualifier). Falls back to ``None``
+    when no FROM is present or the first source isn't a Table.
+
+    Used to derive CTE names like ``product_joined`` /
+    ``product_aggregated`` from the data the query is about, rather
+    than from the file's entity hint which is often less specific.
+    """
+    from_clause = target.args.get("from_") or target.args.get("from")
+    if from_clause is None:
+        return None
+    tbl = from_clause.this
+    if isinstance(tbl, exp.Table) and tbl.name:
+        return tbl.name
+    # Could be a subquery; walk to find the first table.
+    first = next(from_clause.find_all(exp.Table), None)
+    if first and first.name:
+        return first.name
+    return None
+
+
+def _cte_name_prefix(target: exp.Select, entity_hint: str) -> str:
+    """Pick the prefix for layered CTE names. Prefers the bare name
+    of the first FROM source (so a query starting ``FROM product``
+    yields ``product_joined`` / ``product_aggregated``). Falls back
+    to ``entity_hint`` when the FROM source has no recognisable
+    name. Strips a single trailing ``_prepared`` / ``_filtered`` /
+    ``_joined`` / ``_aggregated`` so a subsequent layer doesn't
+    double-stack the suffix when the input is already layered.
+    """
+    base = _from_table_name(target) or entity_hint or "result"
+    for suffix in ("_prepared", "_filtered", "_joined", "_aggregated"):
+        if base.endswith(suffix):
+            base = base[: -len(suffix)]
+            break
+    return base
+
+
 def extract_joined_cte(
     sql: str,
     findings: List[QualityFinding],
@@ -2294,7 +2378,9 @@ def extract_joined_cte(
 
     outer_projections = list(target.expressions)
 
-    cte_name = f"{entity_hint}_joined"
+    # Prefer FROM-table name over file entity hint for naming.
+    prefix = _cte_name_prefix(target, entity_hint)
+    cte_name = f"{prefix}_joined"
 
     # Plan the joined CTE's projection list and the outer's replacement
     # column references.
@@ -2585,8 +2671,19 @@ def extract_filtered_cte(
     if existing_with is None:
         return sql, findings
 
-    # Find <entity>_joined.
-    joined_cte_name = f"{entity_hint}_joined"
+    # Find the joined CTE. We don't know the prefix used here
+    # (the extract_joined_cte pass may have used a FROM-table name),
+    # so look for ANY existing CTE ending in ``_joined`` whose name
+    # is what the outer FROM currently references.
+    outer_from = target.args.get("from_") or target.args.get("from")
+    referenced_cte_name = None
+    if outer_from is not None:
+        first_tbl = outer_from.this if isinstance(outer_from.this, exp.Table) else None
+        if first_tbl is not None and first_tbl.name.endswith("_joined"):
+            referenced_cte_name = first_tbl.name
+    if referenced_cte_name is None:
+        return sql, findings
+    joined_cte_name = referenced_cte_name
     joined_cte: Optional[exp.CTE] = None
     joined_idx: Optional[int] = None
     for i, cte in enumerate(existing_with.expressions):
@@ -2605,11 +2702,14 @@ def extract_filtered_cte(
         return sql, findings
 
     # Build the filtered CTE: SELECT * FROM <joined_cte> WHERE <where>.
-    filtered_cte_name = f"{entity_hint}_filtered"
+    # Use the same prefix as the joined CTE so the names align
+    # (``product_joined`` → ``product_filtered``).
+    prefix = joined_cte_name[: -len("_joined")] if joined_cte_name.endswith("_joined") else (entity_hint or "result")
+    filtered_cte_name = f"{prefix}_filtered"
     counter = 2
     used_names = {c.alias_or_name for c in existing_with.expressions}
     while filtered_cte_name in used_names:
-        filtered_cte_name = f"{entity_hint}_filtered_{counter}"
+        filtered_cte_name = f"{prefix}_filtered_{counter}"
         counter += 1
 
     # Strip the qualifiers from columns in the moved WHERE. They
@@ -2787,8 +2887,12 @@ def extract_aggregation_cte(
     if not has_formatting:
         return sql, findings
 
-    # Construct the aggregation CTE name.
-    cte_name = f"{entity_hint}_aggregated"
+    # Construct the aggregation CTE name. Prefer the existing
+    # joined/filtered CTE's prefix (the agg CTE typically reads
+    # from one of them, so naming should align). Falls back to
+    # the FROM-table or entity hint.
+    prefix = _cte_name_prefix(target, entity_hint)
+    cte_name = f"{prefix}_aggregated"
 
     # Find every distinct aggregate expression in the outer
     # projections, give it a stable name, and remember the mapping.
@@ -3220,8 +3324,24 @@ def extract_union_branches_to_ctes(
             replacements.append(branch)
             continue
 
-        # Pick a name for this branch's CTE.
-        inferred = _infer_branch_name_from_literal(branch)
+        # Pick a name for this branch's CTE. Preferred order:
+        #   1. FROM-table / CTE name of the branch (most concrete —
+        #      ``FROM raw.customer`` → ``customer``;
+        #      ``FROM web_orders_filtered`` → ``web_orders``).
+        #   2. Literal tag in the branch's projection list
+        #      (``'A' AS source_ind``) → snake-case the literal.
+        #   3. ``<entity>_<n>`` fallback.
+        from_name: Optional[str] = None
+        if isinstance(branch, exp.Select):
+            from_name = _from_table_name(branch)
+            if from_name:
+                # Strip a known layer suffix so the branch name lands
+                # at the source level.
+                for suffix in ("_prepared", "_filtered", "_joined", "_aggregated"):
+                    if from_name.endswith(suffix):
+                        from_name = from_name[: -len(suffix)]
+                        break
+        inferred = from_name or _infer_branch_name_from_literal(branch)
         base = inferred or f"{entity_hint}_{fallback_idx}"
         if not inferred:
             fallback_idx += 1
@@ -3925,38 +4045,52 @@ def apply_auto_fixes(
     opt = optimize_config or OptimizeConfig()
 
     if not detection_only:
-        for f in findings:
-            if f.rule == "WHERE_1_EQUALS_1":
-                new = _AUTOFIX_WHERE_TRUE.sub("WHERE ", out)
-                new = _AUTOFIX_LEADING_WHERE_TRUE.sub("\n", new)
-                if new != out:
-                    out = new
-                    f.auto_fixed = True
-                    log.where_true_removed = True
+        rules_enabled = opt.enabled if opt and opt.enabled else {}
+
+        def rule_on(key: str) -> bool:
+            """True if a rule is enabled (defaults to True for keys
+            not present in the toggle map)."""
+            return rules_enabled.get(key, True)
+
+        if rule_on("where_true_removed"):
+            for f in findings:
+                if f.rule == "WHERE_1_EQUALS_1":
+                    new = _AUTOFIX_WHERE_TRUE.sub("WHERE ", out)
+                    new = _AUTOFIX_LEADING_WHERE_TRUE.sub("\n", new)
+                    if new != out:
+                        out = new
+                        f.auto_fixed = True
+                        log.where_true_removed = True
 
         # Customer rule 1: legacy schema replacement (opt-in via config).
-        if cfg.legacy_schemas:
+        if rule_on("schema_replacement") and cfg.legacy_schemas:
             out = apply_schema_replacement(
                 out, findings, cfg.legacy_schemas, cfg.replacement_schema, log,
             )
 
         # Customer rule 2.2: legacy date-variable normalisation.
-        out = apply_legacy_date_variable_replacement(out, findings, cfg.date_variable, log)
+        if rule_on("legacy_date_replacement"):
+            out = apply_legacy_date_variable_replacement(
+                out, findings, cfg.date_variable, log,
+            )
 
         # Customer rule 3: obsolete-CTE removal.
-        out = remove_obsolete_ctes(out, findings, cfg.obsolete_cte_names, log)
+        if rule_on("obsolete_cte_removal"):
+            out = remove_obsolete_ctes(out, findings, cfg.obsolete_cte_names, log)
 
         # Customer rule 4 / 13: strip metadata columns from SELECT
         # projections AND from WHERE predicates.
-        out = strip_metadata_columns(out, findings, cfg.metadata_blacklist, log)
+        if rule_on("metadata_column_strip"):
+            out = strip_metadata_columns(out, findings, cfg.metadata_blacklist, log)
 
         # Lift inline subqueries into named CTEs (in-scope shapes only).
         # Done before format-normalisation so the final pretty-print covers
         # the rewritten AST in one pass.
-        before = out
-        out, findings = lift_subqueries_to_ctes(out, findings)
-        if out != before:
-            log.subqueries_lifted = True
+        if rule_on("subquery_lift"):
+            before = out
+            out, findings = lift_subqueries_to_ctes(out, findings)
+            if out != before:
+                log.subqueries_lifted = True
 
         # Replace ``SELECT DISTINCT`` with an explicit two-CTE dedup
         # pattern (``<entity>_ranked`` + ``<entity>_deduped``).
@@ -3964,63 +4098,68 @@ def apply_auto_fixes(
         # before we touch DISTINCT) and BEFORE source pushdown so the
         # downstream layering passes see a deduped CTE as their FROM
         # rather than a DISTINCT-flagged SELECT.
-        before = out
-        out, findings = replace_distinct_with_rownum(
-            out, findings, entity_hint, log,
-        )
-        if out != before:
-            log.distinct_rewritten = True
+        if rule_on("distinct_rewrite"):
+            before = out
+            out, findings = replace_distinct_with_rownum(
+                out, findings, entity_hint, log,
+            )
+            if out != before:
+                log.distinct_rewritten = True
 
         # Push single-table projections and filters into per-source CTEs.
         # Runs after the subquery lift so any derived tables that became
         # CTEs are correctly excluded from pushdown targets.
-        before = out
-        out, findings = push_projections_to_source_ctes(out, findings)
-        if out != before:
-            log.projections_pushed = True
+        if rule_on("source_pushdown"):
+            before = out
+            out, findings = push_projections_to_source_ctes(out, findings)
+            if out != before:
+                log.projections_pushed = True
 
         # Lift JOINs + non-cast single-source derivations into a
         # dedicated ``<entity>_joined`` CTE. Runs BEFORE aggregation
         # extraction so the agg CTE just groups over a single-table
         # input.
-        before = out
-        out, findings = extract_joined_cte(out, findings, entity_hint, log)
-        if out != before:
-            log.joined_cte_extracted = True
+        if rule_on("joined_cte"):
+            before = out
+            out, findings = extract_joined_cte(out, findings, entity_hint, log)
+            if out != before:
+                log.joined_cte_extracted = True
 
         # Lift the joined CTE's WHERE into a dedicated
         # ``<entity>_filtered`` CTE so each layer stays single-concern.
         # Runs between joined and aggregation passes.
-        before = out
-        out, findings = extract_filtered_cte(out, findings, entity_hint, log)
-        if out != before:
-            log.filtered_cte_extracted = True
+        if rule_on("filtered_cte"):
+            before = out
+            out, findings = extract_filtered_cte(out, findings, entity_hint, log)
+            if out != before:
+                log.filtered_cte_extracted = True
 
         # Lift aggregates + GROUP BY into a dedicated ``<entity>_aggregated``
         # CTE so the outer SELECT only applies casting / defaulting.
         # Runs AFTER projection pushdown + joined-CTE extraction.
-        before = out
-        out, findings = extract_aggregation_cte(out, findings, entity_hint, log)
-        if out != before:
-            log.aggregation_cte_extracted = True
+        if rule_on("aggregation_cte"):
+            before = out
+            out, findings = extract_aggregation_cte(out, findings, entity_hint, log)
+            if out != before:
+                log.aggregation_cte_extracted = True
 
         # Lift each top-level ``UNION ALL`` branch into its own CTE so
         # the top-level statement is a pure
         # ``SELECT * FROM cte_a UNION ALL SELECT * FROM cte_b ...``.
-        # Runs after the per-branch transforms (which currently only
-        # affect the first branch — the others are lifted as-is).
-        before = out
-        out, findings = extract_union_branches_to_ctes(
-            out, findings, entity_hint, log
-        )
-        if out != before:
-            log.union_branches_extracted = True
+        # Runs after the per-branch transforms.
+        if rule_on("union_branch_lift"):
+            before = out
+            out, findings = extract_union_branches_to_ctes(
+                out, findings, entity_hint, log
+            )
+            if out != before:
+                log.union_branches_extracted = True
 
         # Customer rule 7 (qualifier rewrite): replace catalog/schema
         # on every base-table reference with the configured qualifier.
         # Runs last so it picks up tables introduced by earlier
         # transforms (e.g., schema-replacement).
-        if opt.table_qualifier:
+        if rule_on("table_qualifier_rewrite") and opt.table_qualifier:
             out = apply_table_qualifier(out, opt.table_qualifier, log)
 
     # Format-normalise via sqlglot. Preserves semantics; produces
@@ -4055,7 +4194,50 @@ def apply_auto_fixes(
     if not detection_only:
         out = _annotate_ctes_with_roles(out, entity_hint)
 
+    # Split run-on banner comments — sqlglot's pretty printer
+    # concatenates multiple ``/* ... */`` block comments attached to
+    # the same AST node onto a single long line. Break them onto
+    # individual lines so the output stays readable.
+    out = _split_runon_block_comments(out)
+
     return out, findings, log
+
+
+# Pattern matches `*/ <whitespace not including newline> /*` on the
+# same line. We split that into ``*/`` + newline + indent + ``/*``.
+_RUNON_BLOCK_COMMENT_RE = re.compile(r"\*/[ \t]+/\*")
+
+
+def _split_runon_block_comments(sql: str) -> str:
+    """Break run-on `/* a */ /* b */ /* c */` chains into one
+    block-comment per line. Preserves the indent of whichever line
+    the chain started on, so the resulting comments stay vertically
+    aligned. Fail-soft on errors."""
+    if not sql:
+        return sql
+    try:
+        out_lines: List[str] = []
+        for line in sql.split("\n"):
+            if "*/" not in line or "/*" not in line:
+                out_lines.append(line)
+                continue
+            # Capture the line's leading whitespace.
+            stripped = line.lstrip()
+            indent = line[: len(line) - len(stripped)]
+            # Split on the run-on pattern.
+            split = _RUNON_BLOCK_COMMENT_RE.split(line)
+            if len(split) == 1:
+                out_lines.append(line)
+                continue
+            # First piece keeps the original indent + ``*/``;
+            # subsequent pieces get the same indent + ``/*`` prefix.
+            out_lines.append(split[0] + "*/")
+            for piece in split[1:-1]:
+                out_lines.append(f"{indent}/*{piece}*/")
+            out_lines.append(f"{indent}/*{split[-1]}")
+        return "\n".join(out_lines)
+    except Exception:  # noqa: BLE001 — fail-soft
+        return sql
 
 
 # Map from CTE-name suffix to the one-line role comment that
@@ -4377,6 +4559,10 @@ def emit_genie_prompt(
     """
     cfg = customer_config or CustomerRuleConfig()
     opt = optimize_config or OptimizeConfig()
+    rules_enabled = opt.enabled if opt and opt.enabled else {}
+
+    def rule_on(key: str) -> bool:
+        return rules_enabled.get(key, True)
 
     lines: List[str] = []
     lines.append("# Genie instructions")
@@ -4391,8 +4577,8 @@ def emit_genie_prompt(
     # Workflow ordering matches CUSTOMER_RULES.md.
     n = 0
 
-    # 1. Schema replacement (only when configured).
-    if cfg.legacy_schemas:
+    # 1. Schema replacement (only when configured AND enabled).
+    if rule_on("schema_replacement") and cfg.legacy_schemas:
         n += 1
         legacy = ", ".join(f"`{s}`" for s in cfg.legacy_schemas)
         lines.append(
@@ -4401,27 +4587,28 @@ def emit_genie_prompt(
             f"table reference."
         )
 
-    # 2. SCD2 filtering (always relevant).
-    n += 1
-    lines.append(
-        f"{n}. **SCD2 Filtering** — every source table CTE must "
-        f"apply point-in-time filtering:"
-    )
-    lines.append("   ```sql")
-    lines.append(f"   WHERE CAST('{{{cfg.date_variable}}}' AS DATE) >= _valid_from")
-    lines.append(
-        f"     AND CAST('{{{cfg.date_variable}}}' AS DATE) <  "
-        f"COALESCE(_valid_to, CAST('9999-12-31' AS DATE))"
-    )
-    lines.append("   ```")
-    lines.append(
-        "   Use the variable above; do **not** use `BETWEEN`. "
-        "Replace any legacy `{reporting_date}` references with "
-        f"`{{{cfg.date_variable}}}`."
-    )
+    # 2. SCD2 filtering (controlled by `legacy_date_replacement` flag).
+    if rule_on("legacy_date_replacement"):
+        n += 1
+        lines.append(
+            f"{n}. **SCD2 Filtering** — every source table CTE must "
+            f"apply point-in-time filtering:"
+        )
+        lines.append("   ```sql")
+        lines.append(f"   WHERE CAST('{{{cfg.date_variable}}}' AS DATE) >= _valid_from")
+        lines.append(
+            f"     AND CAST('{{{cfg.date_variable}}}' AS DATE) <  "
+            f"COALESCE(_valid_to, CAST('9999-12-31' AS DATE))"
+        )
+        lines.append("   ```")
+        lines.append(
+            "   Use the variable above; do **not** use `BETWEEN`. "
+            "Replace any legacy `{reporting_date}` references with "
+            f"`{{{cfg.date_variable}}}`."
+        )
 
     # 3. Remove obsolete logic.
-    if cfg.obsolete_cte_names:
+    if rule_on("obsolete_cte_removal") and cfg.obsolete_cte_names:
         n += 1
         obs = ", ".join(f"`{c}`" for c in cfg.obsolete_cte_names)
         lines.append(
@@ -4431,7 +4618,7 @@ def emit_genie_prompt(
         )
 
     # 4. Exclude metadata columns.
-    if cfg.metadata_blacklist:
+    if rule_on("metadata_column_strip") and cfg.metadata_blacklist:
         n += 1
         meta = ", ".join(f"`{c}`" for c in cfg.metadata_blacklist)
         lines.append(
@@ -4461,133 +4648,117 @@ def emit_genie_prompt(
     )
 
     # 7. Layered CTE structure — the 5-layer model.
-    n += 1
-    lines.append(
-        f"{n}. **Layered CTE Structure** — every query should fan out "
-        "into single-concern CTEs. Each CTE answers one question:"
-    )
-    lines.append(
-        "   - **Source layer** — `<table>_prepared` or "
-        "`<table>_filtered`. Owns bare columns, renames, single-source "
-        "value transforms (UPPER, TRIM, arithmetic), and single-source "
-        "WHERE filters. One CTE per source table referenced."
-    )
-    lines.append(
-        "   - **Joined layer** — `<entity>_joined`. Owns JOINs and "
-        "multi-source derivations (column expressions that depend on "
-        "more than one source). NO WHERE clause. NO aggregation."
-    )
-    lines.append(
-        "   - **Filtered layer** — `<entity>_filtered`. Owns "
-        "cross-source WHERE predicates (filters whose operands come "
-        "from multiple source CTEs). Emitted ONLY when such "
-        "predicates exist. NO joins, NO derivations, NO aggregation."
-    )
-    lines.append(
-        "   - **Aggregated layer** — `<entity>_aggregated`. Owns "
-        "`GROUP BY`, aggregate functions (`SUM`, `MAX`, `COUNT`, ...), "
-        "and `HAVING`. Reads from the filtered or joined CTE. NO "
-        "JOINs of its own, NO derivations, NO formatting."
-    )
-    lines.append(
-        "   - **Final SELECT** (no CTE — top level). Owns "
-        "`CAST`, `COALESCE`, `NULLIF`, `CASE` with defaults, "
-        "constants/literals, `ORDER BY`, `LIMIT`, and window functions "
-        "(`ROW_NUMBER`, `LAG`, `SUM OVER PARTITION BY`). Reads from "
-        "the aggregated/filtered/joined CTE. NO joins of its own, NO "
-        "WHERE, NO GROUP BY."
-    )
+    # Show this section only when ANY of the layering rules is enabled.
+    layering_rules = ("source_pushdown", "joined_cte", "filtered_cte", "aggregation_cte")
+    if any(rule_on(k) for k in layering_rules):
+        n += 1
+        lines.append(
+            f"{n}. **Layered CTE Structure** — every query should fan out "
+            "into single-concern CTEs. Each CTE answers one question:"
+        )
+        if rule_on("source_pushdown"):
+            lines.append(
+                "   - **Source layer** — `<table>_prepared` or "
+                "`<table>_filtered`. Owns bare columns, renames, single-source "
+                "value transforms (UPPER, TRIM, arithmetic), and single-source "
+                "WHERE filters. One CTE per source table referenced."
+            )
+        if rule_on("joined_cte"):
+            lines.append(
+                "   - **Joined layer** — `<entity>_joined`. Owns JOINs and "
+                "multi-source derivations (column expressions that depend on "
+                "more than one source). NO WHERE clause. NO aggregation."
+            )
+        if rule_on("filtered_cte"):
+            lines.append(
+                "   - **Filtered layer** — `<entity>_filtered`. Owns "
+                "cross-source WHERE predicates (filters whose operands come "
+                "from multiple source CTEs). Emitted ONLY when such "
+                "predicates exist. NO joins, NO derivations, NO aggregation."
+            )
+        if rule_on("aggregation_cte"):
+            lines.append(
+                "   - **Aggregated layer** — `<entity>_aggregated`. Owns "
+                "`GROUP BY`, aggregate functions (`SUM`, `MAX`, `COUNT`, ...), "
+                "and `HAVING`. Reads from the filtered or joined CTE. NO "
+                "JOINs of its own, NO derivations, NO formatting."
+            )
+        lines.append(
+            "   - **Final SELECT** (no CTE — top level). Owns "
+            "`CAST`, `COALESCE`, `NULLIF`, `CASE` with defaults, "
+            "constants/literals, `ORDER BY`, `LIMIT`, and window functions "
+            "(`ROW_NUMBER`, `LAG`, `SUM OVER PARTITION BY`). Reads from "
+            "the aggregated/filtered/joined CTE. NO joins of its own, NO "
+            "WHERE, NO GROUP BY."
+        )
 
     # 8. UNION ALL purity + source tagging.
-    n += 1
-    lines.append(
-        f"{n}. **UNION ALL Purity** — when combining datasets, lift "
-        "each branch into its own CTE first. The top-level body must "
-        "be a pure `SELECT * FROM <branch_cte_a> UNION ALL SELECT * "
-        "FROM <branch_cte_b> ...` with no casts, no filters, no "
-        "expressions. Each branch must add a string-literal tag "
-        "column identifying the source "
-        "(e.g., `'A_SOURCE' AS source_ind`), and each branch's CTE "
-        "body must itself be fully layered using the rules above."
-    )
+    if rule_on("union_branch_lift"):
+        n += 1
+        lines.append(
+            f"{n}. **UNION ALL Purity** — when combining datasets, lift "
+            "each branch into its own CTE first. The top-level body must "
+            "be a pure `SELECT * FROM <branch_cte_a> UNION ALL SELECT * "
+            "FROM <branch_cte_b> ...` with no casts, no filters, no "
+            "expressions. Each branch must add a string-literal tag "
+            "column identifying the source "
+            "(e.g., `'A_SOURCE' AS source_ind`), and each branch's CTE "
+            "body must itself be fully layered using the rules above."
+        )
 
-    # 9. Predicate-subquery → CTE.
-    n += 1
-    lines.append(
-        f"{n}. **Predicate Subquery Lift** — `WHERE x IN (SELECT ...)` "
-        "and `WHERE EXISTS (SELECT ...)` must have their inner SELECT "
-        "lifted into a dedicated CTE; the predicate becomes `WHERE x "
-        "IN (SELECT col FROM <cte>)` or `WHERE EXISTS (SELECT 1 FROM "
-        "<cte> WHERE <cte>.x = outer.x)`. For correlated cases, "
-        "promote the correlation column as a projection in the lifted "
-        "CTE; non-correlation predicates stay inside the CTE."
-    )
+    # 9. Predicate-subquery → CTE (controlled by subquery_lift toggle).
+    if rule_on("subquery_lift"):
+        n += 1
+        lines.append(
+            f"{n}. **Predicate Subquery Lift** — `WHERE x IN (SELECT ...)` "
+            "and `WHERE EXISTS (SELECT ...)` must have their inner SELECT "
+            "lifted into a dedicated CTE; the predicate becomes `WHERE x "
+            "IN (SELECT col FROM <cte>)` or `WHERE EXISTS (SELECT 1 FROM "
+            "<cte> WHERE <cte>.x = outer.x)`. For correlated cases, "
+            "promote the correlation column as a projection in the lifted "
+            "CTE; non-correlation predicates stay inside the CTE."
+        )
 
-    # 10. EXCEPT / INTERSECT branch lift.
-    n += 1
-    lines.append(
-        f"{n}. **EXCEPT / INTERSECT Lift** — top-level "
-        "`EXCEPT` / `INTERSECT` operands that aren't already bare "
-        "`SELECT * FROM <cte>` references must be lifted into their "
-        "own CTEs. The resulting body should be a pure "
-        "`SELECT * FROM <a> EXCEPT SELECT * FROM <b>`."
-    )
+        # 10. EXCEPT / INTERSECT branch lift (shares the subquery_lift toggle).
+        n += 1
+        lines.append(
+            f"{n}. **EXCEPT / INTERSECT Lift** — top-level "
+            "`EXCEPT` / `INTERSECT` operands that aren't already bare "
+            "`SELECT * FROM <cte>` references must be lifted into their "
+            "own CTEs. The resulting body should be a pure "
+            "`SELECT * FROM <a> EXCEPT SELECT * FROM <b>`."
+        )
 
     # 11. Avoid DISTINCT — explicit ranked + deduped pattern.
-    n += 1
-    lines.append(
-        f"{n}. **Replace DISTINCT with explicit dedup** — `SELECT "
-        "DISTINCT` hides data-quality problems. Rewrite as two CTEs:"
-    )
-    lines.append(
-        "   ```sql"
-    )
-    lines.append(
-        "   WITH <entity>_ranked AS ("
-    )
-    lines.append(
-        "     SELECT <projection_list>,"
-    )
-    lines.append(
-        "            ROW_NUMBER() OVER ("
-    )
-    lines.append(
-        "              PARTITION BY <all projection columns>"
-    )
-    lines.append(
-        "              ORDER BY (SELECT NULL)"
-    )
-    lines.append(
-        "            ) AS rn"
-    )
-    lines.append(
-        "     FROM <original-FROM-WHERE-GROUP-BY>"
-    )
-    lines.append(
-        "   ), <entity>_deduped AS ("
-    )
-    lines.append(
-        "     SELECT <projection_list> FROM <entity>_ranked WHERE rn = 1"
-    )
-    lines.append(
-        "   )"
-    )
-    lines.append(
-        "   SELECT * FROM <entity>_deduped"
-    )
-    lines.append(
-        "   ```"
-    )
-    lines.append(
-        "   The `_ranked` CTE makes the duplication visible and "
-        "inspectable; the `_deduped` CTE is a separate filtering step. "
-        "Use a meaningful ORDER BY in the window when there's a "
-        "deterministic tie-break key (e.g., latest scan_date wins); "
-        "otherwise `(SELECT NULL)` signals an order-independent dedup."
-    )
+    if rule_on("distinct_rewrite"):
+        n += 1
+        lines.append(
+            f"{n}. **Replace DISTINCT with explicit dedup** — `SELECT "
+            "DISTINCT` hides data-quality problems. Rewrite as two CTEs:"
+        )
+        lines.append("   ```sql")
+        lines.append("   WITH <entity>_ranked AS (")
+        lines.append("     SELECT <projection_list>,")
+        lines.append("            ROW_NUMBER() OVER (")
+        lines.append("              PARTITION BY <all projection columns>")
+        lines.append("              ORDER BY (SELECT NULL)")
+        lines.append("            ) AS rn")
+        lines.append("     FROM <original-FROM-WHERE-GROUP-BY>")
+        lines.append("   ), <entity>_deduped AS (")
+        lines.append("     SELECT <projection_list> FROM <entity>_ranked WHERE rn = 1")
+        lines.append("   )")
+        lines.append("   SELECT * FROM <entity>_deduped")
+        lines.append("   ```")
+        lines.append(
+            "   The `_ranked` CTE makes the duplication visible and "
+            "inspectable; the `_deduped` CTE is a separate filtering step. "
+            "Use a meaningful ORDER BY in the window when there's a "
+            "deterministic tie-break key (e.g., latest scan_date wins); "
+            "otherwise `(SELECT NULL)` signals an order-independent dedup."
+        )
 
-    # 10. Table qualifier rewrite.
-    if opt.table_qualifier:
+    # 12. Table qualifier rewrite.
+    if rule_on("table_qualifier_rewrite") and opt.table_qualifier:
         n += 1
         lines.append(
             f"{n}. **Table Qualifier** — every base table reference "
@@ -4721,9 +4892,29 @@ class OptimizeConfig:
     ``union_separator`` is a pre-parse substitution: when the input
     SQL uses a comma between top-level SELECTs to mean UNION ALL,
     this tells the script to convert each occurrence before parsing.
+
+    ``enabled`` is a per-rule toggle map. Every key defaults to True;
+    set a key to False in the YAML to skip that transform. Skipped
+    transforms also drop out of the Genie instruction text so the
+    prompt only lists rules the agent should apply.
     """
     table_qualifier: Optional[str] = "schema_identifier_ssf_snapshot"
     union_separator: Optional[str] = ","
+    enabled: Dict[str, bool] = field(default_factory=lambda: {
+        "where_true_removed":        True,
+        "schema_replacement":        True,
+        "legacy_date_replacement":   True,
+        "obsolete_cte_removal":      True,
+        "metadata_column_strip":     True,
+        "subquery_lift":             True,
+        "distinct_rewrite":          True,
+        "source_pushdown":           True,
+        "joined_cte":                True,
+        "filtered_cte":              True,
+        "aggregation_cte":           True,
+        "union_branch_lift":         True,
+        "table_qualifier_rewrite":   True,
+    })
 
 
 @dataclass
@@ -4837,9 +5028,17 @@ def load_config(path: Optional[Path]) -> PipelineConfig:
 
     op = raw.get("optimize") or {}
     if op:
+        # Merge per-rule toggles: start from defaults (all True),
+        # apply YAML overrides on top. Unknown keys are ignored.
+        merged_enabled = dict(cfg.optimize.enabled)
+        yaml_enabled = op.get("enabled") or {}
+        for key, val in yaml_enabled.items():
+            if key in merged_enabled:
+                merged_enabled[key] = bool(val)
         cfg.optimize = OptimizeConfig(
             table_qualifier=op.get("table_qualifier") or None,
             union_separator=op.get("union_separator") or None,
+            enabled=merged_enabled,
         )
 
     fl = raw.get("files") or {}

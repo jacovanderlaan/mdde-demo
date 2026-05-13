@@ -18,7 +18,7 @@ Validation Checklist:
 - [X] Table qualifiers normalised.
 */
 
-WITH web AS (
+WITH orders AS (
   -- Source filter: single-table SELECT + WHERE for one source
   WITH orders_filtered AS (
     SELECT
@@ -29,14 +29,19 @@ WITH web AS (
     WHERE
       channel = 'WEB'
   )
-  /* @mdde-entity: union_revenue_breakdown */ /* @mdde-layer: business */ /* @mdde-stereotype: fact */ /* @mdde-description: Web vs store revenue breakdown via UNION ALL. */ /* Exercises UNION-branch extraction: each branch becomes its own CTE */ /* named from its `'X' AS channel` literal tag (`web` / `store`). */
+  /* @mdde-entity: union_revenue_breakdown */
+  /* @mdde-layer: business */
+  /* @mdde-stereotype: fact */
+  /* @mdde-description: Web vs store revenue breakdown via UNION ALL. */
+  /* Exercises UNION-branch extraction: each branch becomes its own CTE */
+  /* named from its `'X' AS channel` literal tag (`web` / `store`). */
   SELECT
     o.customer_id,
     o.order_date,
     o.amount,
     'web' AS channel
   FROM orders_filtered AS o
-), store AS (
+), orders_2 AS (
   -- Source filter: single-table SELECT + WHERE for one source
   WITH orders_filtered AS (
     SELECT
@@ -56,8 +61,8 @@ WITH web AS (
 )
 SELECT
   *
-FROM web
+FROM orders
 UNION ALL
 SELECT
   *
-FROM store
+FROM orders_2

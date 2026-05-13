@@ -27,7 +27,16 @@ Validation Checklist:
 - [X] Cross-source filtering isolated.
 */
 
-/* @mdde-entity: customer_subqueries */ /* @mdde-layer: business */ /* @mdde-stereotype: fact */ /* @mdde-description: Subquery shapes that should be lifted to CTEs (plus two that should be left inline) */ /* Planted shapes: */ /*   1. Derived table in FROM        -> lift (alias 'recent_orders') */ /*   2. Derived table in JOIN        -> lift (alias 'order_totals') */ /*   3. Scalar subquery in SELECT    -> lift (uncorrelated) */ /*   4. WHERE IN (SELECT ...)        -> lift (inner SELECT goes to a CTE; outer keeps the IN against the CTE) */ /*   5. Correlated subquery in SELECT-> SKIP (correlated scalar subquery in projection — still inline) */
+/* @mdde-entity: customer_subqueries */
+/* @mdde-layer: business */
+/* @mdde-stereotype: fact */
+/* @mdde-description: Subquery shapes that should be lifted to CTEs (plus two that should be left inline) */
+/* Planted shapes: */
+/*   1. Derived table in FROM        -> lift (alias 'recent_orders') */
+/*   2. Derived table in JOIN        -> lift (alias 'order_totals') */
+/*   3. Scalar subquery in SELECT    -> lift (uncorrelated) */
+/*   4. WHERE IN (SELECT ...)        -> lift (inner SELECT goes to a CTE; outer keeps the IN against the CTE) */
+/*   5. Correlated subquery in SELECT-> SKIP (correlated scalar subquery in projection — still inline) */
 CREATE OR REPLACE VIEW customer_subqueries AS
 -- Source prep: single-table SELECT + renames + single-source value transforms
 WITH stg_customers_prepared AS (
@@ -48,6 +57,13 @@ WITH stg_customers_prepared AS (
     order_status = 'SHIPPED'
   GROUP BY
     customer_id
+)
+-- Source prep: single-table SELECT + renames + single-source value transforms
+, r_prepared AS (
+  SELECT
+    last_order_date,
+    customer_id
+  FROM r
 ), t AS (
   SELECT
     customer_id,
@@ -56,6 +72,14 @@ WITH stg_customers_prepared AS (
   FROM raw_orders
   GROUP BY
     customer_id
+)
+-- Source prep: single-table SELECT + renames + single-source value transforms
+, t_prepared AS (
+  SELECT
+    order_count,
+    total_revenue,
+    customer_id
+  FROM t
 ), _sub2 AS (
   SELECT
     customer_id
@@ -64,7 +88,7 @@ WITH stg_customers_prepared AS (
     order_status = 'SHIPPED'
 )
 -- Joined: JOINs + multi-source derivations only (no WHERE, no aggregation)
-, customer_subqueries_joined AS (
+, stg_customers_joined AS (
   SELECT
     customer_id,
     email,
@@ -73,16 +97,16 @@ WITH stg_customers_prepared AS (
     total_revenue,
     value
   FROM stg_customers_prepared AS c
-  LEFT JOIN r
+  LEFT JOIN r_prepared AS r
     ON r.customer_id = c.customer_id
-  LEFT JOIN t
+  LEFT JOIN t_prepared AS t
     ON t.customer_id = c.customer_id
 )
--- Filtered: cross-source WHERE predicates (no JOIN, no derivation, no aggregation)
-, customer_subqueries_filtered AS (
+-- Source filter: single-table SELECT + WHERE for one source
+, stg_customers_filtered AS (
   SELECT
     *
-  FROM customer_subqueries_joined
+  FROM stg_customers_joined
   WHERE
     customer_id IN (
       SELECT
@@ -108,4 +132,4 @@ SELECT
     WHERE
       customer_id = customer_id
   ) AS lifetime_order_count
-FROM customer_subqueries_filtered;
+FROM stg_customers_filtered;

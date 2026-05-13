@@ -20,7 +20,13 @@ Validation Checklist:
 */
 
 WITH _sub1 AS (
-  /* @mdde-entity: except_subscribed_customers */ /* @mdde-layer: business */ /* @mdde-stereotype: filter */ /* @mdde-description: Subscribed customers minus those who unsubscribed. */ /* Exercises top-level EXCEPT lifting: each branch becomes its own CTE, */ /* the top-level body becomes a pure */ /* `SELECT * FROM cte_a EXCEPT SELECT * FROM cte_b`. */
+  /* @mdde-entity: except_subscribed_customers */
+  /* @mdde-layer: business */
+  /* @mdde-stereotype: filter */
+  /* @mdde-description: Subscribed customers minus those who unsubscribed. */
+  /* Exercises top-level EXCEPT lifting: each branch becomes its own CTE, */
+  /* the top-level body becomes a pure */
+  /* `SELECT * FROM cte_a EXCEPT SELECT * FROM cte_b`. */
   SELECT
     c.customer_id AS customer_id,
     c.email AS email

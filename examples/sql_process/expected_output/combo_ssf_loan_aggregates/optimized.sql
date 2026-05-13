@@ -25,7 +25,13 @@ Validation Checklist:
 - [X] Table qualifiers normalised.
 */
 
-/* @mdde-entity: combo_ssf_loan_aggregates */ /* @mdde-layer: business */ /* @mdde-stereotype: aggregate */ /* @mdde-description: SSF-style banking aggregate over loans + customers. Stresses: */ /* passthrough-CTE rewrite, source-CTE pushdown with single-source derivations, */ /* joined CTE for multi-source derivations, agg CTE with HAVING, outer CAST/CASE, */ /* metadata column stripping, schema-qualifier rewrite. */
+/* @mdde-entity: combo_ssf_loan_aggregates */
+/* @mdde-layer: business */
+/* @mdde-stereotype: aggregate */
+/* @mdde-description: SSF-style banking aggregate over loans + customers. Stresses: */
+/* passthrough-CTE rewrite, source-CTE pushdown with single-source derivations, */
+/* joined CTE for multi-source derivations, agg CTE with HAVING, outer CAST/CASE, */
+/* metadata column stripping, schema-qualifier rewrite. */
 WITH cust AS (
   SELECT
     customer_id AS customer_id,
@@ -46,7 +52,7 @@ WITH cust AS (
     status = 'OPEN' AND principal_amount > 0
 )
 -- Joined: JOINs + multi-source derivations only (no WHERE, no aggregation)
-, combo_ssf_loan_aggregates_joined AS (
+, cust_joined AS (
   SELECT
     customer_id,
     country_code,
@@ -60,7 +66,7 @@ WITH cust AS (
     ON l.customer_id = c.customer_id
 )
 -- Aggregated: GROUP BY + aggregates + HAVING (no JOIN, no derivation, no WHERE)
-, combo_ssf_loan_aggregates_aggregated AS (
+, cust_aggregated AS (
   SELECT
     customer_id,
     country_code,
@@ -70,7 +76,7 @@ WITH cust AS (
     AVG(interest_rate * 100) AS interest_rate_avg,
     COUNT(*) AS agg_3,
     MAX(opened_at) AS opened_at_max
-  FROM combo_ssf_loan_aggregates_joined
+  FROM cust_joined
   GROUP BY
     customer_id,
     country,
@@ -95,7 +101,7 @@ SELECT
   END AS exposure_tier,
   COALESCE(country, 'unknown') AS country_clean,
   'loan_rollup' AS rollup_kind
-FROM combo_ssf_loan_aggregates_aggregated
+FROM cust_aggregated
 ORDER BY
   total_principal DESC
 LIMIT 1000

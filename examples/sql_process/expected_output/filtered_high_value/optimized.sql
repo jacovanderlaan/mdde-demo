@@ -42,7 +42,7 @@ WITH customer_prepared AS (
     amount > 100
 )
 -- Joined: JOINs + multi-source derivations only (no WHERE, no aggregation)
-, filtered_high_value_joined AS (
+, customer_joined AS (
   SELECT
     customer_id,
     country,
@@ -53,18 +53,24 @@ WITH customer_prepared AS (
   INNER JOIN orders_filtered AS o
     ON o.customer_id = c.customer_id
 )
--- Filtered: cross-source WHERE predicates (no JOIN, no derivation, no aggregation)
-, filtered_high_value_filtered AS (
+-- Source filter: single-table SELECT + WHERE for one source
+, customer_filtered AS (
   SELECT
     *
-  FROM filtered_high_value_joined
+  FROM customer_joined
   WHERE
     country = payment_method
 )
-/* @mdde-entity: filtered_high_value */ /* @mdde-layer: business */ /* @mdde-stereotype: fact */ /* @mdde-description: Joins customer + orders and filters on a cross-source */ /* predicate (customer's country must match the order's payment_method region). */ /* Exercises the `<entity>_filtered` CTE: the cross-source WHERE moves OUT of the */ /* joined CTE into its own layer so each CTE has a single concern. */
+/* @mdde-entity: filtered_high_value */
+/* @mdde-layer: business */
+/* @mdde-stereotype: fact */
+/* @mdde-description: Joins customer + orders and filters on a cross-source */
+/* predicate (customer's country must match the order's payment_method region). */
+/* Exercises the `<entity>_filtered` CTE: the cross-source WHERE moves OUT of the */
+/* joined CTE into its own layer so each CTE has a single concern. */
 SELECT
   customer_id,
   country,
   order_date,
   amount
-FROM filtered_high_value_filtered
+FROM customer_filtered

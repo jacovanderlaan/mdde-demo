@@ -31,7 +31,7 @@ WITH customer_filtered AS (
     NOT email IS NULL
 )
 -- Joined: JOINs + multi-source derivations only (no WHERE, no aggregation)
-, lateral_unnest_joined AS (
+, customer_joined AS (
   SELECT
     customer_id,
     email,
@@ -51,10 +51,16 @@ WITH customer_filtered AS (
   ) AS o
     ON TRUE
 )
-/* @mdde-entity: lateral_unnest */ /* @mdde-layer: business */ /* @mdde-stereotype: fact */ /* @mdde-description: LATERAL join — the right-hand side references columns from */ /* the left side. Tests that source pushdown and joined-CTE extraction handle */ /* LATERAL correctly (or fail-soft and leave the structure alone). */ /* Snowflake/Databricks/Postgres syntax: LATERAL FLATTEN / EXPLODE / UNNEST. */
+/* @mdde-entity: lateral_unnest */
+/* @mdde-layer: business */
+/* @mdde-stereotype: fact */
+/* @mdde-description: LATERAL join — the right-hand side references columns from */
+/* the left side. Tests that source pushdown and joined-CTE extraction handle */
+/* LATERAL correctly (or fail-soft and leave the structure alone). */
+/* Snowflake/Databricks/Postgres syntax: LATERAL FLATTEN / EXPLODE / UNNEST. */
 SELECT
   customer_id,
   email,
   order_id,
   amount
-FROM lateral_unnest_joined
+FROM customer_joined

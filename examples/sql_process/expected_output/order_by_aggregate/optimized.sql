@@ -32,7 +32,7 @@ WITH customer_prepared AS (
   FROM schema_identifier_ssf_snapshot.customer
 )
 -- Joined: JOINs + multi-source derivations only (no WHERE, no aggregation)
-, order_by_aggregate_joined AS (
+, customer_joined AS (
   SELECT
     customer_id,
     country,
@@ -42,24 +42,31 @@ WITH customer_prepared AS (
     ON o.customer_id = c.customer_id
 )
 -- Aggregated: GROUP BY + aggregates + HAVING (no JOIN, no derivation, no WHERE)
-, order_by_aggregate_aggregated AS (
+, customer_aggregated AS (
   SELECT
     customer_id,
     country,
     SUM(amount) AS amount_sum,
     COUNT(*) AS agg_2
-  FROM order_by_aggregate_joined
+  FROM customer_joined
   GROUP BY
     customer_id,
     country
 )
-/* @mdde-entity: order_by_aggregate */ /* @mdde-layer: business */ /* @mdde-stereotype: aggregate */ /* @mdde-description: ORDER BY an aggregate expression at the outer SELECT. After */ /* the aggregation CTE moves SUM(o.amount) → amount_sum, the outer ORDER BY */ /* should reference `amount_sum DESC`, not the raw `SUM(o.amount) DESC` (which */ /* would need to recompute the aggregate against the agg CTE — invalid in many */ /* engines, ugly in all of them). */
+/* @mdde-entity: order_by_aggregate */
+/* @mdde-layer: business */
+/* @mdde-stereotype: aggregate */
+/* @mdde-description: ORDER BY an aggregate expression at the outer SELECT. After */
+/* the aggregation CTE moves SUM(o.amount) → amount_sum, the outer ORDER BY */
+/* should reference `amount_sum DESC`, not the raw `SUM(o.amount) DESC` (which */
+/* would need to recompute the aggregate against the agg CTE — invalid in many */
+/* engines, ugly in all of them). */
 SELECT
   customer_id,
   country,
   CAST(amount_sum AS DECIMAL(18, 2)) AS total_revenue,
   agg_2 AS order_count
-FROM order_by_aggregate_aggregated
+FROM customer_aggregated
 ORDER BY
   amount_sum DESC,
   agg_2 DESC

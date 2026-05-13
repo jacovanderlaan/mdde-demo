@@ -10,17 +10,22 @@ Migration Details:
 - Original SQL File: chained_cte_pipeline.sql
 - Target SQL File:  optimized.sql
 - Summary of Changes:
+  - Pushed single-table projections and filters into per-source `_filtered` / `_prepared` CTEs.
   - Lifted JOINs and multi-source derivations into a dedicated `_joined` CTE; outer SELECT reads from a single-table FROM.
-  - Lifted cross-source WHERE predicates into a dedicated `_filtered` CTE so the joined CTE stays single-concern.
   - Rewrote table qualifiers (catalog/schema) to the target qualifier.
 
 Validation Checklist:
+- [X] Modular CTE structure applied.
 - [X] JOIN isolated into joined CTE.
-- [X] Cross-source filtering isolated.
 - [X] Table qualifiers normalised.
 */
 
-/* @mdde-entity: chained_cte_pipeline */ /* @mdde-layer: business */ /* @mdde-stereotype: fact_aggregate */ /* @mdde-description: User-defined CTE chain (4 levels deep). Exercises that the */ /* layering passes don't accidentally lift / rewrite already-named CTEs that the */ /* author put there on purpose. Only the FINAL SELECT gets layered. */
+/* @mdde-entity: chained_cte_pipeline */
+/* @mdde-layer: business */
+/* @mdde-stereotype: fact_aggregate */
+/* @mdde-description: User-defined CTE chain (4 levels deep). Exercises that the */
+/* layering passes don't accidentally lift / rewrite already-named CTEs that the */
+/* author put there on purpose. Only the FINAL SELECT gets layered. */
 WITH base_customers AS (
   SELECT
     customer_id,
@@ -29,6 +34,14 @@ WITH base_customers AS (
   FROM schema_identifier_ssf_snapshot.customer
   WHERE
     NOT email IS NULL
+)
+-- Source prep: single-table SELECT + renames + single-source value transforms
+, base_customers_prepared AS (
+  SELECT
+    country AS country,
+    email AS email,
+    customer_id
+  FROM base_customers
 ), base_orders AS (
   SELECT
     customer_id,
@@ -54,8 +67,19 @@ WITH base_customers AS (
     ROW_NUMBER() OVER (ORDER BY ct.lifetime_revenue DESC) AS revenue_rank
   FROM customer_totals AS ct
 )
+-- Source filter: single-table SELECT + WHERE for one source
+, ranked_customers_filtered AS (
+  SELECT
+    customer_id AS customer_id,
+    order_count AS order_count,
+    revenue_rank AS revenue_rank,
+    lifetime_revenue
+  FROM ranked_customers
+  WHERE
+    lifetime_revenue >= 100
+)
 -- Joined: JOINs + multi-source derivations only (no WHERE, no aggregation)
-, chained_cte_pipeline_joined AS (
+, ranked_customers_joined AS (
   SELECT
     customer_id,
     country,
@@ -63,17 +87,9 @@ WITH base_customers AS (
     lifetime_revenue,
     order_count,
     revenue_rank
-  FROM ranked_customers AS rc
-  INNER JOIN base_customers AS bc
+  FROM ranked_customers_filtered AS rc
+  INNER JOIN base_customers_prepared AS bc
     ON bc.customer_id = rc.customer_id
-)
--- Filtered: cross-source WHERE predicates (no JOIN, no derivation, no aggregation)
-, chained_cte_pipeline_filtered AS (
-  SELECT
-    *
-  FROM chained_cte_pipeline_joined
-  WHERE
-    lifetime_revenue >= 100
 )
 SELECT
   customer_id,
@@ -89,4 +105,4 @@ SELECT
     THEN 'top-100'
     ELSE 'long-tail'
   END AS tier
-FROM chained_cte_pipeline_filtered
+FROM ranked_customers_joined

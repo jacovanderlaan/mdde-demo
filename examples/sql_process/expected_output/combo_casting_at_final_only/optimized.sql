@@ -49,7 +49,7 @@ WITH customer_filtered AS (
     amount > 0
 )
 -- Joined: JOINs + multi-source derivations only (no WHERE, no aggregation)
-, combo_casting_at_final_only_joined AS (
+, customer_joined AS (
   SELECT
     customer_id,
     country_upper,
@@ -63,7 +63,7 @@ WITH customer_filtered AS (
     ON o.customer_id = c.customer_id
 )
 -- Aggregated: GROUP BY + aggregates + HAVING (no JOIN, no derivation, no WHERE)
-, combo_casting_at_final_only_aggregated AS (
+, customer_aggregated AS (
   SELECT
     customer_id,
     country_upper,
@@ -72,7 +72,7 @@ WITH customer_filtered AS (
     payment_method,
     country,
     SUM(amount) AS amount_sum
-  FROM combo_casting_at_final_only_joined
+  FROM customer_joined
   GROUP BY
     customer_id,
     country,
@@ -82,11 +82,21 @@ WITH customer_filtered AS (
   HAVING
     amount_sum > 0
 )
-/* @mdde-entity: combo_casting_at_final_only */ /* @mdde-layer: business */ /* @mdde-stereotype: fact */ /* @mdde-description: Exercises that CAST / COALESCE / NULLIF / CASE / constants */ /* ALWAYS end up at the final SELECT, never folded into source/joined/agg CTEs. */ /* The input deliberately mixes casting and defaulting with: */ /*   - single-source value transforms that DO fold into source CTEs */ /*   - multi-source derivations that DO fold into the joined CTE */ /*   - aggregates that DO fold into the agg CTE */ /* Verifies the boundary stays in the right place across all combinations. */
+/* @mdde-entity: combo_casting_at_final_only */
+/* @mdde-layer: business */
+/* @mdde-stereotype: fact */
+/* @mdde-description: Exercises that CAST / COALESCE / NULLIF / CASE / constants */
+/* ALWAYS end up at the final SELECT, never folded into source/joined/agg CTEs. */
+/* The input deliberately mixes casting and defaulting with: */
+/*   - single-source value transforms that DO fold into source CTEs */
+/*   - multi-source derivations that DO fold into the joined CTE */
+/*   - aggregates that DO fold into the agg CTE */
+/* Verifies the boundary stays in the right place across all combinations. */
 SELECT
   customer_id,
   country_upper,
-  CAST(UPPER(email) AS VARCHAR(100)) AS email_normalised, /* single-source transform wrapped in CAST (CAST stays outer, the value */ /* transform UPPER also stays with it because CAST wraps it) */
+  CAST(UPPER(email) AS VARCHAR(100)) AS email_normalised, /* single-source transform wrapped in CAST (CAST stays outer, the value */
+  /* transform UPPER also stays with it because CAST wraps it) */
   composite_key,
   COALESCE(email, payment_method, 'unknown') AS contact_handle, /* multi-source derivation wrapped in COALESCE (COALESCE stays outer) */
   amount_sum AS revenue, /* aggregate (folds to agg CTE) */
@@ -102,4 +112,4 @@ SELECT
   NULLIF(UPPER(email), '') AS email_or_null, /* NULLIF around a single-source projection (NULLIF stays outer) */
   'rollup_v1' AS rollup_kind, /* Pure literal (stays outer) */
   1.0 AS scale_factor /* Numeric literal (stays outer) */
-FROM combo_casting_at_final_only_aggregated
+FROM customer_aggregated

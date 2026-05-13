@@ -3,7 +3,10 @@
 -- @mdde-stereotype: stg_cleaned
 -- @mdde-description: Cleansed customers — typed, deduplicated, null-handled
 
-/* @mdde-entity: stg_customers */ /* @mdde-layer: staging */ /* @mdde-stereotype: stg_cleaned */ /* @mdde-description: Cleansed customers — typed, deduplicated, null-handled */
+/* @mdde-entity: stg_customers */
+/* @mdde-layer: staging */
+/* @mdde-stereotype: stg_cleaned */
+/* @mdde-description: Cleansed customers — typed, deduplicated, null-handled */
 CREATE OR REPLACE VIEW stg_customers AS
 SELECT
   CAST(customer_id AS BIGINT) AS customer_id, /* @pk @business_key */

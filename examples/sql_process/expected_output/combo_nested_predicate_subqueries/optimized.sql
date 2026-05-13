@@ -56,7 +56,14 @@ WITH customer_prepared AS (
       FROM schema_identifier_ssf_snapshot.loans
     )
 )
-/* @mdde-entity: combo_nested_predicate_subqueries */ /* @mdde-layer: business */ /* @mdde-stereotype: filter */ /* @mdde-description: NESTED predicate subqueries — WHERE IN whose body itself */ /* contains another WHERE IN, plus a WHERE EXISTS whose body contains a scalar */ /* subquery in its projection. Stresses recursive subquery lifting: every level */ /* of nesting should produce its own CTE, with correlations promoted as */ /* projections where needed. */
+/* @mdde-entity: combo_nested_predicate_subqueries */
+/* @mdde-layer: business */
+/* @mdde-stereotype: filter */
+/* @mdde-description: NESTED predicate subqueries — WHERE IN whose body itself */
+/* contains another WHERE IN, plus a WHERE EXISTS whose body contains a scalar */
+/* subquery in its projection. Stresses recursive subquery lifting: every level */
+/* of nesting should produce its own CTE, with correlations promoted as */
+/* projections where needed. */
 SELECT
   c.customer_id,
   c.country,

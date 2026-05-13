@@ -42,7 +42,7 @@ WITH customer_prepared AS (
   FROM schema_identifier_ssf_snapshot.orders
 )
 -- Joined: JOINs + multi-source derivations only (no WHERE, no aggregation)
-, source_derivations_joined AS (
+, customer_joined AS (
   SELECT
     customer_id,
     email_clean,
@@ -58,7 +58,12 @@ WITH customer_prepared AS (
   LEFT JOIN orders_prepared AS o
     ON o.customer_id = c.customer_id
 )
-/* @mdde-entity: source_derivations */ /* @mdde-layer: business */ /* @mdde-stereotype: int_consolidated */ /* @mdde-description: Single-source value transforms (UPPER, TRIM, arithmetic) get */ /* folded into the source CTE alongside renames. Multi-source derivations stay in */ /* the joined CTE. CAST / CASE / COALESCE / constants stay at the outer SELECT. */
+/* @mdde-entity: source_derivations */
+/* @mdde-layer: business */
+/* @mdde-stereotype: int_consolidated */
+/* @mdde-description: Single-source value transforms (UPPER, TRIM, arithmetic) get */
+/* folded into the source CTE alongside renames. Multi-source derivations stay in */
+/* the joined CTE. CAST / CASE / COALESCE / constants stay at the outer SELECT. */
 SELECT
   customer_id,
   email_clean,
@@ -73,4 +78,4 @@ SELECT
   CAST(amount AS DECIMAL(18, 2)) AS amount_fmt,
   COALESCE(country, 'unknown') AS country_clean,
   'derivation_demo' AS rollup_kind
-FROM source_derivations_joined
+FROM customer_joined

@@ -27,22 +27,27 @@ WITH _sub1 AS (
   FROM schema_identifier_ssf_snapshot.orders
   WHERE
     order_date >= '2024-01-01'
-), web AS (
-  /* @mdde-entity: nested_union_except */ /* @mdde-layer: business */ /* @mdde-stereotype: filter */ /* @mdde-description: Three-branch UNION ALL where one branch is itself an */ /* EXCEPT. Exercises UNION + EXCEPT composition: each top-level UNION branch */ /* gets layered; an EXCEPT branch's two sides become their own CTEs too. */
+), orders AS (
+  /* @mdde-entity: nested_union_except */
+  /* @mdde-layer: business */
+  /* @mdde-stereotype: filter */
+  /* @mdde-description: Three-branch UNION ALL where one branch is itself an */
+  /* EXCEPT. Exercises UNION + EXCEPT composition: each top-level UNION branch */
+  /* gets layered; an EXCEPT branch's two sides become their own CTEs too. */
   SELECT
     customer_id AS customer_id,
     'web' AS channel
   FROM schema_identifier_ssf_snapshot.orders
   WHERE
     channel = 'WEB'
-), store AS (
+), orders_2 AS (
   SELECT
     customer_id AS customer_id,
     'store' AS channel
   FROM schema_identifier_ssf_snapshot.orders
   WHERE
     channel = 'STORE'
-), churned AS (
+), customer AS (
   SELECT
     customer_id AS customer_id,
     'churned' AS channel
@@ -50,15 +55,15 @@ WITH _sub1 AS (
 )
 SELECT
   *
-FROM web
+FROM orders
 UNION ALL
 SELECT
   *
-FROM store
+FROM orders_2
 UNION ALL
 SELECT
   *
-FROM churned
+FROM customer
 EXCEPT
 SELECT
   *

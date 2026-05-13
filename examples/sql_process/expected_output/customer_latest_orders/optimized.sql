@@ -16,7 +16,10 @@ Validation Checklist:
 - [X] JOIN isolated into joined CTE.
 */
 
-/* @mdde-entity: customer_latest_orders */ /* @mdde-layer: business */ /* @mdde-stereotype: fact_dedup */ /* @mdde-description: Per-customer latest order via window dedup (QUALIFY pattern) */
+/* @mdde-entity: customer_latest_orders */
+/* @mdde-layer: business */
+/* @mdde-stereotype: fact_dedup */
+/* @mdde-description: Per-customer latest order via window dedup (QUALIFY pattern) */
 CREATE OR REPLACE VIEW customer_latest_orders AS
 -- Source prep: single-table SELECT + renames + single-source value transforms
 WITH stg_customers_prepared AS (
@@ -46,17 +49,27 @@ WITH stg_customers_prepared AS (
   WHERE
     recency_rank = 1
 )
+-- Source prep: single-table SELECT + renames + single-source value transforms
+, latest_per_customer_prepared AS (
+  SELECT
+    order_id AS latest_order_id, /* @fk(raw_orders.order_id) */
+    order_date AS latest_order_date,
+    total_amount AS latest_order_amount,
+    DATEDIFF(CURRENT_DATE, order_date) AS days_since_last_order, /* @derived */
+    customer_id
+  FROM latest_per_customer
+)
 -- Joined: JOINs + multi-source derivations only (no WHERE, no aggregation)
-, customer_latest_orders_joined AS (
+, stg_customers_joined AS (
   SELECT
     customer_id,
     email,
-    order_id AS latest_order_id,
-    order_date AS latest_order_date,
-    total_amount AS latest_order_amount,
-    DATEDIFF(CURRENT_DATE, l.order_date) AS days_since_last_order
+    latest_order_id,
+    latest_order_date,
+    latest_order_amount,
+    days_since_last_order
   FROM stg_customers_prepared AS c
-  LEFT JOIN latest_per_customer AS l
+  LEFT JOIN latest_per_customer_prepared AS l
     ON c.customer_id = l.customer_id
 )
 SELECT
@@ -66,4 +79,4 @@ SELECT
   latest_order_date,
   latest_order_amount,
   days_since_last_order
-FROM customer_latest_orders_joined;
+FROM stg_customers_joined;

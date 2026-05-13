@@ -22,7 +22,7 @@ Validation Checklist:
 - [X] Table qualifiers normalised.
 */
 
-WITH web AS (
+WITH customer AS (
   -- Source prep: single-table SELECT + renames + single-source value transforms
   WITH customer_prepared AS (
     SELECT
@@ -40,7 +40,7 @@ WITH web AS (
       channel = 'WEB'
 )
   -- Joined: JOINs + multi-source derivations only (no WHERE, no aggregation)
-  , web_joined AS (
+  , customer_joined AS (
     SELECT
       country,
       amount
@@ -49,23 +49,28 @@ WITH web AS (
       ON o.customer_id = c.customer_id
 )
   -- Aggregated: GROUP BY + aggregates + HAVING (no JOIN, no derivation, no WHERE)
-  , web_aggregated AS (
+  , customer_aggregated AS (
     SELECT
       country,
       SUM(amount) AS amount_sum,
       COUNT(*) AS agg_2
-    FROM web_joined
+    FROM customer_joined
     GROUP BY
       country
   )
-  /* @mdde-entity: union_with_layering */ /* @mdde-layer: business */ /* @mdde-stereotype: fact */ /* @mdde-description: Web vs store revenue aggregates UNIONed together. Each branch */ /* has its own JOIN + aggregation. Exercises recursive layering inside UNION-branch */ /* CTEs: each branch CTE becomes a nested layered pipeline. */
+  /* @mdde-entity: union_with_layering */
+  /* @mdde-layer: business */
+  /* @mdde-stereotype: fact */
+  /* @mdde-description: Web vs store revenue aggregates UNIONed together. Each branch */
+  /* has its own JOIN + aggregation. Exercises recursive layering inside UNION-branch */
+  /* CTEs: each branch CTE becomes a nested layered pipeline. */
   SELECT
     country,
     CAST(amount_sum AS DECIMAL(18, 2)) AS revenue,
     agg_2 AS order_count,
     'web' AS channel
-  FROM web_aggregated
-), store AS (
+  FROM customer_aggregated
+), customer_2 AS (
   -- Source prep: single-table SELECT + renames + single-source value transforms
   WITH customer_prepared AS (
     SELECT
@@ -83,7 +88,7 @@ WITH web AS (
       channel = 'STORE'
 )
   -- Joined: JOINs + multi-source derivations only (no WHERE, no aggregation)
-  , store_joined AS (
+  , customer_joined AS (
     SELECT
       country,
       amount
@@ -92,12 +97,12 @@ WITH web AS (
       ON o.customer_id = c.customer_id
 )
   -- Aggregated: GROUP BY + aggregates + HAVING (no JOIN, no derivation, no WHERE)
-  , store_aggregated AS (
+  , customer_aggregated AS (
     SELECT
       country,
       SUM(amount) AS amount_sum,
       COUNT(*) AS agg_2
-    FROM store_joined
+    FROM customer_joined
     GROUP BY
       country
   )
@@ -106,12 +111,12 @@ WITH web AS (
     CAST(amount_sum AS DECIMAL(18, 2)) AS revenue,
     agg_2 AS order_count,
     'store' AS channel
-  FROM store_aggregated
+  FROM customer_aggregated
 )
 SELECT
   *
-FROM web
+FROM customer
 UNION ALL
 SELECT
   *
-FROM store
+FROM customer_2

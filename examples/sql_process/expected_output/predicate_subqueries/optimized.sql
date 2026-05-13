@@ -42,7 +42,14 @@ WITH customer_prepared AS (
   WHERE
     l.status = 'OPEN'
 )
-/* @mdde-entity: predicate_subqueries */ /* @mdde-layer: business */ /* @mdde-stereotype: filter */ /* @mdde-description: Exercises lifting of WHERE IN, WHERE EXISTS, and */ /* correlated subqueries. Each predicate's inner SELECT becomes its own */ /* CTE; the outer predicate keeps its IN/EXISTS structure but references */ /* the new CTE. Correlated cases carry the correlation column up to the */ /* lifted CTE's projection so the outer WHERE can re-correlate. */
+/* @mdde-entity: predicate_subqueries */
+/* @mdde-layer: business */
+/* @mdde-stereotype: filter */
+/* @mdde-description: Exercises lifting of WHERE IN, WHERE EXISTS, and */
+/* correlated subqueries. Each predicate's inner SELECT becomes its own */
+/* CTE; the outer predicate keeps its IN/EXISTS structure but references */
+/* the new CTE. Correlated cases carry the correlation column up to the */
+/* lifted CTE's projection so the outer WHERE can re-correlate. */
 SELECT
   c.customer_id,
   c.email,

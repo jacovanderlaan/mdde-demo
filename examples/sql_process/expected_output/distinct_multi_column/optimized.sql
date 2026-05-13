@@ -19,8 +19,13 @@ Validation Checklist:
 */
 
 -- Ranked: ROW_NUMBER() OVER (PARTITION BY all projection columns) — replaces SELECT DISTINCT, makes duplicates inspectable
-WITH distinct_multi_column_ranked AS (
-  /* @mdde-entity: distinct_multi_column */ /* @mdde-layer: business */ /* @mdde-stereotype: dim */ /* @mdde-description: Multi-column DISTINCT over a JOIN. Exercises the */ /* DISTINCT-to-ROW_NUMBER rewrite with multiple partition columns and ORDER BY */ /* + LIMIT at the outer SELECT (which should move to the deduped layer's outer). */
+WITH customer_ranked AS (
+  /* @mdde-entity: distinct_multi_column */
+  /* @mdde-layer: business */
+  /* @mdde-stereotype: dim */
+  /* @mdde-description: Multi-column DISTINCT over a JOIN. Exercises the */
+  /* DISTINCT-to-ROW_NUMBER rewrite with multiple partition columns and ORDER BY */
+  /* + LIMIT at the outer SELECT (which should move to the deduped layer's outer). */
   SELECT
     c.customer_id AS customer_id,
     c.country AS country,
@@ -39,18 +44,18 @@ WITH distinct_multi_column_ranked AS (
     l.status = 'OPEN'
 )
 -- Deduped: filters WHERE rn = 1 (removes duplicates surfaced by the ranked CTE above)
-, distinct_multi_column_deduped AS (
+, customer_deduped AS (
   SELECT
     customer_id,
     country,
     loan_product
-  FROM distinct_multi_column_ranked
+  FROM customer_ranked
   WHERE
     rn = 1
 )
 SELECT
   *
-FROM distinct_multi_column_deduped
+FROM customer_deduped
 ORDER BY
   country,
   customer_id

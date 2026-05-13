@@ -30,7 +30,7 @@ WITH customer_prepared AS (
   FROM schema_identifier_ssf_snapshot.customer
 )
 -- Joined: JOINs + multi-source derivations only (no WHERE, no aggregation)
-, having_top_spenders_joined AS (
+, customer_joined AS (
   SELECT
     customer_id,
     country,
@@ -40,23 +40,28 @@ WITH customer_prepared AS (
     ON o.customer_id = c.customer_id
 )
 -- Aggregated: GROUP BY + aggregates + HAVING (no JOIN, no derivation, no WHERE)
-, having_top_spenders_aggregated AS (
+, customer_aggregated AS (
   SELECT
     customer_id,
     country,
     SUM(amount) AS amount_sum,
     COUNT(*) AS agg_2
-  FROM having_top_spenders_joined
+  FROM customer_joined
   GROUP BY
     customer_id,
     country
   HAVING
     amount_sum > 1000 AND agg_2 >= 5
 )
-/* @mdde-entity: having_top_spenders */ /* @mdde-layer: business */ /* @mdde-stereotype: aggregate */ /* @mdde-description: Aggregate with a HAVING clause. HAVING gates aggregated */ /* output and must move INTO the aggregation CTE (it can't be evaluated until */ /* after GROUP BY). Outer SELECT applies casting / defaulting only. */
+/* @mdde-entity: having_top_spenders */
+/* @mdde-layer: business */
+/* @mdde-stereotype: aggregate */
+/* @mdde-description: Aggregate with a HAVING clause. HAVING gates aggregated */
+/* output and must move INTO the aggregation CTE (it can't be evaluated until */
+/* after GROUP BY). Outer SELECT applies casting / defaulting only. */
 SELECT
   customer_id,
   country,
   CAST(amount_sum AS DECIMAL(18, 2)) AS total_revenue,
   agg_2 AS order_count
-FROM having_top_spenders_aggregated
+FROM customer_aggregated

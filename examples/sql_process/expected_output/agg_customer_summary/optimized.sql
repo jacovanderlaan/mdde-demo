@@ -31,7 +31,7 @@ WITH customer_prepared AS (
   FROM schema_identifier_ssf_snapshot.customer
 )
 -- Joined: JOINs + multi-source derivations only (no WHERE, no aggregation)
-, agg_customer_summary_joined AS (
+, customer_joined AS (
   SELECT
     customer_id,
     email,
@@ -43,7 +43,7 @@ WITH customer_prepared AS (
     ON o.customer_id = c.customer_id
 )
 -- Aggregated: GROUP BY + aggregates + HAVING (no JOIN, no derivation, no WHERE)
-, agg_customer_summary_aggregated AS (
+, customer_aggregated AS (
   SELECT
     customer_id,
     email,
@@ -51,13 +51,18 @@ WITH customer_prepared AS (
     SUM(amount) AS amount_sum,
     COUNT(*) AS agg_2,
     MAX(order_date) AS order_date_max
-  FROM agg_customer_summary_joined
+  FROM customer_joined
   GROUP BY
     customer_id,
     email,
     country
 )
-/* @mdde-entity: agg_customer_summary */ /* @mdde-layer: business */ /* @mdde-stereotype: aggregate */ /* @mdde-description: Per-customer revenue rollup that mixes aggregates with casts and defaults. */ /* Exercises the `<entity>_aggregated` CTE extraction: SUM / COUNT / MAX become */ /* pre-aggregated columns; the outer SELECT only applies CAST, COALESCE, constants. */
+/* @mdde-entity: agg_customer_summary */
+/* @mdde-layer: business */
+/* @mdde-stereotype: aggregate */
+/* @mdde-description: Per-customer revenue rollup that mixes aggregates with casts and defaults. */
+/* Exercises the `<entity>_aggregated` CTE extraction: SUM / COUNT / MAX become */
+/* pre-aggregated columns; the outer SELECT only applies CAST, COALESCE, constants. */
 SELECT
   customer_id,
   email,
@@ -67,4 +72,4 @@ SELECT
   order_date_max AS last_order_date,
   COALESCE(country, 'unknown') AS country_clean,
   'customer_summary' AS rollup_kind
-FROM agg_customer_summary_aggregated
+FROM customer_aggregated

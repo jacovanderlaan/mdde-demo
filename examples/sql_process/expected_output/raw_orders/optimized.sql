@@ -14,7 +14,10 @@ Validation Checklist:
 - [X] Table qualifiers normalised.
 */
 
-/* @mdde-entity: raw_orders */ /* @mdde-layer: source */ /* @mdde-stereotype: src_raw */ /* @mdde-description: Raw orders landing from order management system */
+/* @mdde-entity: raw_orders */
+/* @mdde-layer: source */
+/* @mdde-stereotype: src_raw */
+/* @mdde-description: Raw orders landing from order management system */
 CREATE OR REPLACE VIEW raw_orders AS
 SELECT
   order_id, /* @pk @business_key */

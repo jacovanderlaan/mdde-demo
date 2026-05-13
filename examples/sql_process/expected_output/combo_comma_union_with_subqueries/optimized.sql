@@ -29,7 +29,7 @@ WITH _sub1 AS (
   SELECT
     MAX(amount) AS value
   FROM schema_identifier_ssf_snapshot.orders
-), has_email AS (
+), customer AS (
   -- Source filter: single-table SELECT + WHERE for one source
   WITH customer_filtered AS (
     SELECT
@@ -40,7 +40,13 @@ WITH _sub1 AS (
     WHERE
       NOT email IS NULL
   )
-  /* @mdde-entity: combo_comma_union_with_subqueries */ /* @mdde-layer: business */ /* @mdde-stereotype: fact */ /* @mdde-description: Customer-generated SQL with a BARE COMMA between two top-level */ /* SELECTs (instead of UNION ALL) and scalar subqueries inside each branch's */ /* projection list. Stresses: comma-as-UNION pre-parse, scalar subquery → CTE */ /* lifting, recursive per-branch layering inside the lifted UNION CTEs. */
+  /* @mdde-entity: combo_comma_union_with_subqueries */
+  /* @mdde-layer: business */
+  /* @mdde-stereotype: fact */
+  /* @mdde-description: Customer-generated SQL with a BARE COMMA between two top-level */
+  /* SELECTs (instead of UNION ALL) and scalar subqueries inside each branch's */
+  /* projection list. Stresses: comma-as-UNION pre-parse, scalar subquery → CTE */
+  /* lifting, recursive per-branch layering inside the lifted UNION CTEs. */
   SELECT
     c.customer_id,
     c.country,
@@ -52,7 +58,7 @@ WITH _sub1 AS (
     ) AS max_order_globally,
     'has_email' AS bucket
   FROM customer_filtered AS c
-), no_email AS (
+), customer_2 AS (
   -- Source filter: single-table SELECT + WHERE for one source
   WITH customer_filtered AS (
     SELECT
@@ -77,8 +83,8 @@ WITH _sub1 AS (
 )
 SELECT
   *
-FROM has_email
+FROM customer
 UNION ALL
 SELECT
   *
-FROM no_email
+FROM customer_2

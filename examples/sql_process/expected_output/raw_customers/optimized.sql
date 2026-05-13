@@ -14,7 +14,10 @@ Validation Checklist:
 - [X] Table qualifiers normalised.
 */
 
-/* @mdde-entity: raw_customers */ /* @mdde-layer: source */ /* @mdde-stereotype: src_raw */ /* @mdde-description: Raw customer landing from CRM */
+/* @mdde-entity: raw_customers */
+/* @mdde-layer: source */
+/* @mdde-stereotype: src_raw */
+/* @mdde-description: Raw customer landing from CRM */
 CREATE OR REPLACE VIEW raw_customers AS
 SELECT
   customer_id, /* @pk @business_key */

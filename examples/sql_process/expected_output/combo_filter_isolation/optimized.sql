@@ -60,7 +60,7 @@ WITH customer_filtered AS (
     status = 'OPEN' /* single-source loans */
 )
 -- Joined: JOINs + multi-source derivations only (no WHERE, no aggregation)
-, combo_filter_isolation_joined AS (
+, customer_joined AS (
   SELECT
     customer_id,
     country,
@@ -76,17 +76,25 @@ WITH customer_filtered AS (
     ON o.customer_id = c.customer_id
   INNER JOIN loans_filtered AS l
     ON l.customer_id = c.customer_id
-)
--- Filtered: cross-source WHERE predicates (no JOIN, no derivation, no aggregation)
-, combo_filter_isolation_filtered AS (
+), customer_filtered_2 AS (
   SELECT
     *
-  FROM combo_filter_isolation_joined
+  FROM customer_joined
   WHERE
     country = payment_method /* cross-source (customer + orders) → filtered CTE */
     AND principal_amount > amount /* cross-source (loans + orders) → filtered CTE */
 )
-/* @mdde-entity: combo_filter_isolation */ /* @mdde-layer: business */ /* @mdde-stereotype: fact */ /* @mdde-description: Stresses the filter-isolation rule. The input WHERE clause */ /* has FOUR kinds of predicates that should be routed to DIFFERENT layers: */ /*   1. Single-source on customer (folds to customer_prepared/_filtered) */ /*   2. Single-source on orders (folds to orders_prepared/_filtered) */ /*   3. Single-source on loans (folds to loans_prepared/_filtered) */ /*   4. Cross-source predicate touching customer + orders (must move to a */ /*      dedicated <entity>_filtered CTE — NEVER stays in the joined CTE) */ /* The joined CTE must end up with NO WHERE clause. */
+/* @mdde-entity: combo_filter_isolation */
+/* @mdde-layer: business */
+/* @mdde-stereotype: fact */
+/* @mdde-description: Stresses the filter-isolation rule. The input WHERE clause */
+/* has FOUR kinds of predicates that should be routed to DIFFERENT layers: */
+/*   1. Single-source on customer (folds to customer_prepared/_filtered) */
+/*   2. Single-source on orders (folds to orders_prepared/_filtered) */
+/*   3. Single-source on loans (folds to loans_prepared/_filtered) */
+/*   4. Cross-source predicate touching customer + orders (must move to a */
+/*      dedicated <entity>_filtered CTE — NEVER stays in the joined CTE) */
+/* The joined CTE must end up with NO WHERE clause. */
 SELECT
   customer_id,
   country,
@@ -95,4 +103,4 @@ SELECT
   order_date,
   loan_principal,
   loan_status
-FROM combo_filter_isolation_filtered
+FROM customer_filtered_2

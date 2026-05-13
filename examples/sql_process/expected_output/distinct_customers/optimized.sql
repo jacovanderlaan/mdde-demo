@@ -19,8 +19,13 @@ Validation Checklist:
 */
 
 -- Ranked: ROW_NUMBER() OVER (PARTITION BY all projection columns) — replaces SELECT DISTINCT, makes duplicates inspectable
-WITH distinct_customers_ranked AS (
-  /* @mdde-entity: distinct_customers */ /* @mdde-layer: business */ /* @mdde-stereotype: dim */ /* @mdde-description: SELECT DISTINCT to deduplicate customers by email domain. */ /* Exercises DISTINCT handling: the keyword must survive the layering passes */ /* intact so the outer SELECT still de-dupes. */
+WITH customer_ranked AS (
+  /* @mdde-entity: distinct_customers */
+  /* @mdde-layer: business */
+  /* @mdde-stereotype: dim */
+  /* @mdde-description: SELECT DISTINCT to deduplicate customers by email domain. */
+  /* Exercises DISTINCT handling: the keyword must survive the layering passes */
+  /* intact so the outer SELECT still de-dupes. */
   SELECT
     c.customer_id AS customer_id,
     c.email AS email,
@@ -37,15 +42,15 @@ WITH distinct_customers_ranked AS (
     NOT c.email IS NULL
 )
 -- Deduped: filters WHERE rn = 1 (removes duplicates surfaced by the ranked CTE above)
-, distinct_customers_deduped AS (
+, customer_deduped AS (
   SELECT
     customer_id,
     email,
     email_domain
-  FROM distinct_customers_ranked
+  FROM customer_ranked
   WHERE
     rn = 1
 )
 SELECT
   *
-FROM distinct_customers_deduped
+FROM customer_deduped

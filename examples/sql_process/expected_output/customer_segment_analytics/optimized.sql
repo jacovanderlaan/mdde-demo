@@ -18,7 +18,10 @@ Validation Checklist:
 - [X] JOIN isolated into joined CTE.
 */
 
-/* @mdde-entity: customer_segment_analytics */ /* @mdde-layer: business */ /* @mdde-stereotype: fact_aggregate */ /* @mdde-description: Customer segment analytics with scalar subqueries and multi-CTE chain */
+/* @mdde-entity: customer_segment_analytics */
+/* @mdde-layer: business */
+/* @mdde-stereotype: fact_aggregate */
+/* @mdde-description: Customer segment analytics with scalar subqueries and multi-CTE chain */
 CREATE OR REPLACE VIEW customer_segment_analytics AS
 -- Source prep: single-table SELECT + renames + single-source value transforms
 WITH stg_customers_prepared AS (
@@ -60,7 +63,8 @@ WITH stg_customers_prepared AS (
         value
       FROM _sub2
     ) AS max_revenue_overall,
-    ROW_NUMBER() OVER (ORDER BY ct.total_revenue DESC) AS revenue_rank, /* Per-customer rank */ /* @derived */
+    ROW_NUMBER() OVER (ORDER BY ct.total_revenue DESC) AS revenue_rank, /* Per-customer rank */
+    /* @derived */
     CASE
       WHEN ct.total_revenue >= 10000
       THEN 'platinum'
@@ -71,6 +75,18 @@ WITH stg_customers_prepared AS (
       ELSE 'bronze'
     END /* Segment derivation */ AS segment /* @derived */
   FROM customer_totals AS ct
+)
+-- Source prep: single-table SELECT + renames + single-source value transforms
+, ranked_customers_prepared AS (
+  SELECT
+    customer_id, /* @pk @business_key */
+    order_count,
+    total_revenue,
+    avg_orders_overall,
+    max_revenue_overall,
+    revenue_rank, /* @derived */
+    segment /* @derived */
+  FROM ranked_customers
 ), _sub1 AS (
   SELECT
     AVG(order_count) AS value
@@ -81,7 +97,7 @@ WITH stg_customers_prepared AS (
   FROM customer_totals
 )
 -- Joined: JOINs + multi-source derivations only (no WHERE, no aggregation)
-, customer_segment_analytics_joined AS (
+, ranked_customers_joined AS (
   SELECT
     customer_id,
     email,
@@ -93,7 +109,7 @@ WITH stg_customers_prepared AS (
     max_revenue_overall,
     revenue_rank,
     segment
-  FROM ranked_customers AS rc
+  FROM ranked_customers_prepared AS rc
   LEFT JOIN stg_customers_prepared AS c
     ON rc.customer_id = c.customer_id
 )
@@ -108,6 +124,6 @@ SELECT
   max_revenue_overall,
   revenue_rank,
   segment
-FROM customer_segment_analytics_joined
+FROM ranked_customers_joined
 ORDER BY
   revenue_rank;

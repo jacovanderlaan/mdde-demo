@@ -34,7 +34,13 @@ WITH _sub1 AS (
   WHERE
     o.amount > 1000
 ), _sub3 AS (
-  /* @mdde-entity: combo_at_risk_customers */ /* @mdde-layer: business */ /* @mdde-stereotype: filter_with_ranking */ /* @mdde-description: Customers with overdue loans, excluding any who already paid */ /* off recently. Stresses: correlated WHERE IN, correlated WHERE EXISTS, top-level */ /* EXCEPT (with both sides Select), window function (ROW_NUMBER), CAST/CASE in */ /* outer formatting, metadata column stripping, ORDER BY at outer. */
+  /* @mdde-entity: combo_at_risk_customers */
+  /* @mdde-layer: business */
+  /* @mdde-stereotype: filter_with_ranking */
+  /* @mdde-description: Customers with overdue loans, excluding any who already paid */
+  /* off recently. Stresses: correlated WHERE IN, correlated WHERE EXISTS, top-level */
+  /* EXCEPT (with both sides Select), window function (ROW_NUMBER), CAST/CASE in */
+  /* outer formatting, metadata column stripping, ORDER BY at outer. */
   SELECT
     c.customer_id AS customer_id,
     c.email AS email,

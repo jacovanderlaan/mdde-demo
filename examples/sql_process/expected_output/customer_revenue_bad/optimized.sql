@@ -19,7 +19,17 @@ Migration Details:
   - Removed `WHERE 1=1` placeholder.
 */
 
-/* @mdde-entity: customer_revenue */ /* @mdde-layer: business */ /* @mdde-stereotype: fact */ /* @mdde-description: Customer revenue rollup with several planted optimizer issues */ /* Planted issues (the optimizer should catch all of these): */ /*   1. SELECT *           -> warning, auto-fixable */ /*   2. ORDER BY 1         -> warning */ /*   3. WHERE 1=1          -> info */ /*   4. CARTESIAN_JOIN     -> warning (join without ON) */ /*   5. WINDOW_NO_ORDER    -> ERROR (ROW_NUMBER without ORDER BY) */ /*   6. HARDCODED_DATE     -> info */
+/* @mdde-entity: customer_revenue */
+/* @mdde-layer: business */
+/* @mdde-stereotype: fact */
+/* @mdde-description: Customer revenue rollup with several planted optimizer issues */
+/* Planted issues (the optimizer should catch all of these): */
+/*   1. SELECT *           -> warning, auto-fixable */
+/*   2. ORDER BY 1         -> warning */
+/*   3. WHERE 1=1          -> info */
+/*   4. CARTESIAN_JOIN     -> warning (join without ON) */
+/*   5. WINDOW_NO_ORDER    -> ERROR (ROW_NUMBER without ORDER BY) */
+/*   6. HARDCODED_DATE     -> info */
 CREATE OR REPLACE VIEW customer_revenue AS
 WITH ranked AS (
   SELECT

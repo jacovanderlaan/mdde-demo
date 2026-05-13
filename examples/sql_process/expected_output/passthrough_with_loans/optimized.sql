@@ -20,7 +20,12 @@ Validation Checklist:
 - [X] Table qualifiers normalised.
 */
 
-/* @mdde-entity: passthrough_with_loans */ /* @mdde-layer: business */ /* @mdde-stereotype: fact */ /* @mdde-description: Outer SELECT joins two passthrough CTEs that simply wrap a */ /* real table. Exercises passthrough-CTE rewrite: the `SELECT *` body of each */ /* existing CTE is replaced with the renames the outer SELECT actually uses. */
+/* @mdde-entity: passthrough_with_loans */
+/* @mdde-layer: business */
+/* @mdde-stereotype: fact */
+/* @mdde-description: Outer SELECT joins two passthrough CTEs that simply wrap a */
+/* real table. Exercises passthrough-CTE rewrite: the `SELECT *` body of each */
+/* existing CTE is replaced with the renames the outer SELECT actually uses. */
 WITH active_customers AS (
   SELECT
     customer_id AS customer_id,
@@ -38,7 +43,7 @@ WITH active_customers AS (
   FROM schema_identifier_ssf_snapshot.loans
 )
 -- Joined: JOINs + multi-source derivations only (no WHERE, no aggregation)
-, passthrough_with_loans_joined AS (
+, active_customers_joined AS (
   SELECT
     customer_id,
     email,
@@ -57,4 +62,4 @@ SELECT
   principal_amount,
   interest_rate,
   loan_status
-FROM passthrough_with_loans_joined
+FROM active_customers_joined

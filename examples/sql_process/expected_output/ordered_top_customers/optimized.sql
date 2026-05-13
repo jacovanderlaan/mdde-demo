@@ -38,7 +38,7 @@ WITH customer_prepared AS (
     amount > 100
 )
 -- Joined: JOINs + multi-source derivations only (no WHERE, no aggregation)
-, ordered_top_customers_joined AS (
+, customer_joined AS (
   SELECT
     customer_id,
     country,
@@ -48,13 +48,18 @@ WITH customer_prepared AS (
   INNER JOIN orders_filtered AS o
     ON o.customer_id = c.customer_id
 )
-/* @mdde-entity: ordered_top_customers */ /* @mdde-layer: business */ /* @mdde-stereotype: fact */ /* @mdde-description: ORDER BY + LIMIT at the outer SELECT. These belong at the */ /* final SELECT layer (sorting is a presentation concern, not a layer-1 */ /* transformation). The layering passes must preserve them at the top. */
+/* @mdde-entity: ordered_top_customers */
+/* @mdde-layer: business */
+/* @mdde-stereotype: fact */
+/* @mdde-description: ORDER BY + LIMIT at the outer SELECT. These belong at the */
+/* final SELECT layer (sorting is a presentation concern, not a layer-1 */
+/* transformation). The layering passes must preserve them at the top. */
 SELECT
   customer_id,
   country,
   amount,
   order_date
-FROM ordered_top_customers_joined
+FROM customer_joined
 ORDER BY
   amount DESC,
   order_date DESC

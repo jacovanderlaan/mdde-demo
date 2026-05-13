@@ -38,7 +38,7 @@ WITH customer_prepared AS (
     amount > 0
 )
 -- Joined: JOINs + multi-source derivations only (no WHERE, no aggregation)
-, window_ranked_orders_joined AS (
+, customer_joined AS (
   SELECT
     customer_id,
     order_id,
@@ -48,7 +48,12 @@ WITH customer_prepared AS (
   INNER JOIN orders_filtered AS o
     ON o.customer_id = c.customer_id
 )
-/* @mdde-entity: window_ranked_orders */ /* @mdde-layer: business */ /* @mdde-stereotype: fact */ /* @mdde-description: Window functions (ROW_NUMBER, LAG, SUM OVER PARTITION) at the */ /* outer SELECT. Windows must stay at the outer layer (they reshape rows in ways */ /* the agg-CTE pass mustn't intercept). Source / joined CTEs handle the rest. */
+/* @mdde-entity: window_ranked_orders */
+/* @mdde-layer: business */
+/* @mdde-stereotype: fact */
+/* @mdde-description: Window functions (ROW_NUMBER, LAG, SUM OVER PARTITION) at the */
+/* outer SELECT. Windows must stay at the outer layer (they reshape rows in ways */
+/* the agg-CTE pass mustn't intercept). Source / joined CTEs handle the rest. */
 SELECT
   customer_id,
   order_id,
@@ -58,4 +63,4 @@ SELECT
   SUM(amount) OVER (PARTITION BY customer_id) AS customer_total,
   LAG(amount, 1, 0) OVER (PARTITION BY customer_id ORDER BY order_date) AS previous_amount,
   amount - COALESCE(LAG(amount) OVER (PARTITION BY customer_id ORDER BY order_date), 0) AS delta_from_previous
-FROM window_ranked_orders_joined
+FROM customer_joined
