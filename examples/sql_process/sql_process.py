@@ -510,7 +510,12 @@ def parse_file(
             pf.cte_names = _extract_cte_names(pf.parsed)
             pf.source_tables = _extract_source_tables(pf.parsed)
             pf.lineage = _extract_column_lineage(pf.parsed)
-    except sqlglot.errors.ParseError as exc:
+    except (sqlglot.errors.ParseError, sqlglot.errors.TokenError) as exc:
+        # Tokenization failures (unterminated string literals, bad
+        # escape sequences, ...) are just as fatal as parse errors
+        # for our purposes — record the message and skip downstream
+        # transforms. Without this catch ONE malformed file in the
+        # corpus aborts the entire batch.
         pf.parse_error = str(exc)
 
     return pf
@@ -871,7 +876,7 @@ def replace_distinct_with_rownum(
     """
     try:
         statements = sqlglot.parse(sql, read=None)
-    except sqlglot.errors.ParseError:
+    except (sqlglot.errors.ParseError, sqlglot.errors.TokenError):
         return sql, findings
     if not statements or statements[0] is None:
         return sql, findings
@@ -1097,7 +1102,7 @@ def lift_subqueries_to_ctes(
     """
     try:
         statements = sqlglot.parse(sql, read=None)
-    except sqlglot.errors.ParseError:
+    except (sqlglot.errors.ParseError, sqlglot.errors.TokenError):
         return sql, findings
 
     if not statements or statements[0] is None:
@@ -1754,7 +1759,7 @@ def push_projections_to_source_ctes(
     """
     try:
         statements = sqlglot.parse(sql, read=None)
-    except sqlglot.errors.ParseError:
+    except (sqlglot.errors.ParseError, sqlglot.errors.TokenError):
         return sql, findings
     if not statements or statements[0] is None:
         return sql, findings
@@ -2347,7 +2352,7 @@ def extract_joined_cte(
     """
     try:
         statements = sqlglot.parse(sql, read=None)
-    except sqlglot.errors.ParseError:
+    except (sqlglot.errors.ParseError, sqlglot.errors.TokenError):
         return sql, findings
     if not statements or statements[0] is None:
         return sql, findings
@@ -2652,7 +2657,7 @@ def extract_filtered_cte(
     """
     try:
         statements = sqlglot.parse(sql, read=None)
-    except sqlglot.errors.ParseError:
+    except (sqlglot.errors.ParseError, sqlglot.errors.TokenError):
         return sql, findings
     if not statements or statements[0] is None:
         return sql, findings
@@ -2807,7 +2812,7 @@ def extract_aggregation_cte(
     """
     try:
         statements = sqlglot.parse(sql, read=None)
-    except sqlglot.errors.ParseError:
+    except (sqlglot.errors.ParseError, sqlglot.errors.TokenError):
         return sql, findings
     if not statements or statements[0] is None:
         return sql, findings
@@ -3201,7 +3206,7 @@ def extract_union_branches_to_ctes(
     """
     try:
         statements = sqlglot.parse(sql, read=None)
-    except sqlglot.errors.ParseError:
+    except (sqlglot.errors.ParseError, sqlglot.errors.TokenError):
         return sql, findings
     if not statements or statements[0] is None:
         return sql, findings
@@ -3510,7 +3515,7 @@ def apply_schema_replacement(
         return sql
     try:
         statements = sqlglot.parse(sql, read=None)
-    except sqlglot.errors.ParseError:
+    except (sqlglot.errors.ParseError, sqlglot.errors.TokenError):
         return sql
     if not statements or statements[0] is None:
         return sql
@@ -3594,7 +3599,7 @@ def remove_obsolete_ctes(
         return sql
     try:
         statements = sqlglot.parse(sql, read=None)
-    except sqlglot.errors.ParseError:
+    except (sqlglot.errors.ParseError, sqlglot.errors.TokenError):
         return sql
     if not statements or statements[0] is None:
         return sql
@@ -3692,7 +3697,7 @@ def apply_table_qualifier(
         return sql
     try:
         statements = sqlglot.parse(sql, read=None)
-    except sqlglot.errors.ParseError:
+    except (sqlglot.errors.ParseError, sqlglot.errors.TokenError):
         return sql
     if not statements or statements[0] is None:
         return sql
@@ -3760,7 +3765,7 @@ def strip_metadata_columns(
         return sql
     try:
         statements = sqlglot.parse(sql, read=None)
-    except sqlglot.errors.ParseError:
+    except (sqlglot.errors.ParseError, sqlglot.errors.TokenError):
         return sql
     if not statements or statements[0] is None:
         return sql
@@ -4184,7 +4189,7 @@ def apply_auto_fixes(
         if out.rstrip().endswith(";") and not rendered.rstrip().endswith(";"):
             rendered = rendered.rstrip() + ";"
         out = rendered
-    except sqlglot.errors.ParseError:
+    except (sqlglot.errors.ParseError, sqlglot.errors.TokenError):
         pass
 
     # Annotate every CTE in the rendered output with a one-line
@@ -5181,7 +5186,7 @@ def _clean_movement_expression(expr_sql: str) -> str:
         for ident in parsed.find_all(exp.Identifier):
             ident.set("quoted", False)
         cleaned = parsed.sql()
-    except sqlglot.errors.ParseError:
+    except (sqlglot.errors.ParseError, sqlglot.errors.TokenError):
         pass
     # Collapse runs of whitespace.
     cleaned = re.sub(r"\s+", " ", cleaned).strip()
