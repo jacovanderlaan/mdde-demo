@@ -1,6 +1,6 @@
 # sql_process — run report
 
-Files processed: **34**
+Files processed: **36**
 
 ## Files
 
@@ -24,6 +24,7 @@ Files processed: **34**
 | `distinct_multi_column.sql` | distinct_multi_column | business | yes | 0 | 2 | 3 | 2 |
 | `except_subscribed_customers.sql` | except_subscribed_customers | business | yes | 0 | 2 | 2 | 2 |
 | `filtered_high_value.sql` | filtered_high_value | business | yes | 0 | 2 | 4 | 2 |
+| `full_outer_with_coalesce.sql` | full_outer_with_coalesce | business | yes | 0 | 2 | 5 | 2 |
 | `having_top_spenders.sql` | having_top_spenders | business | yes | 0 | 2 | 4 | 3 |
 | `lateral_unnest.sql` | lateral_unnest | business | yes | 0 | 2 | 4 | 4 |
 | `nested_union_except.sql` | nested_union_except | business | yes | 0 | 2 | 2 | 9 |
@@ -39,12 +40,13 @@ Files processed: **34**
 | `union_distinct_skipped.sql` | union_distinct_skipped | business | yes | 0 | 1 | 2 | 7 |
 | `union_revenue_breakdown.sql` | union_revenue_breakdown | business | yes | 0 | 1 | 4 | 3 |
 | `union_with_layering.sql` | union_with_layering | business | yes | 0 | 2 | 4 | 9 |
+| `window_no_order_with_annotation.sql` | window_no_order_with_annotation | business | yes | 0 | 1 | 7 | 4 |
 | `window_ranked_orders.sql` | window_ranked_orders | business | yes | 0 | 2 | 8 | 3 |
 
 ## Quality findings
 
-**Total:** 194 (error=6, warning=56, info=132)  
-**Auto-fixed:** 4
+**Total:** 200 (error=9, warning=57, info=134)  
+**Auto-fixed:** 5
 
 | File | Location | Rule | Severity | Auto-fixed | Message |
 |---|---|---|---|---|---|
@@ -170,6 +172,8 @@ Files processed: **34**
 | `except_subscribed_customers.sql` | <file> | MISSING_SOURCE_VERSION | info | no | Filename 'except_subscribed_customers.sql' has fewer than 3 hyphen-separated ... |
 | `filtered_high_value.sql` | <file> | COMBINED_SOURCE_FILTERS | info | no | WHERE clause references columns from 2 sources (c, o) |
 | `filtered_high_value.sql` | <file> | MISSING_SOURCE_VERSION | info | no | Filename 'filtered_high_value.sql' has fewer than 3 hyphen-separated parts; m... |
+| `full_outer_with_coalesce.sql` | <file> | FULL_OUTER_WITH_COALESCE | warning | no | FULL OUTER JOIN with COALESCE — replace with LEFT JOIN/IS NULL + INNER JOIN +... |
+| `full_outer_with_coalesce.sql` | <file> | MISSING_SOURCE_VERSION | info | no | Filename 'full_outer_with_coalesce.sql' has fewer than 3 hyphen-separated par... |
 | `having_top_spenders.sql` | <file> | SELECT_STAR | warning | no | SELECT * detected - explicit column list recommended |
 | `having_top_spenders.sql` | <file> | SELECT_STAR | warning | no | SELECT * detected - explicit column list recommended |
 | `having_top_spenders.sql` | <file> | MISSING_SOURCE_VERSION | info | no | Filename 'having_top_spenders.sql' has fewer than 3 hyphen-separated parts; m... |
@@ -239,13 +243,17 @@ Files processed: **34**
 | `union_with_layering.sql` | <file> | GROUPBY_NOT_ISOLATED | info | no | GROUP BY combined with WHERE and JOINs in a single SELECT |
 | `union_with_layering.sql` | <file> | GROUPBY_NOT_ISOLATED | info | no | GROUP BY combined with WHERE and JOINs in a single SELECT |
 | `union_with_layering.sql` | <file> | MISSING_SOURCE_VERSION | info | no | Filename 'union_with_layering.sql' has fewer than 3 hyphen-separated parts; m... |
+| `window_no_order_with_annotation.sql` | <file> | MISSING_GROUP_BY | error | no | Aggregate function mixed with non-aggregated columns without GROUP BY |
+| `window_no_order_with_annotation.sql` | <file> | WINDOW_NO_ORDER | error | yes | ROW_NUMBER() without ORDER BY - results are non-deterministic |
+| `window_no_order_with_annotation.sql` | <file> | LAG_LEAD_NO_ORDER | error | no | LAG() without ORDER BY - results are non-deterministic |
+| `window_no_order_with_annotation.sql` | <file> | MISSING_SOURCE_VERSION | info | no | Filename 'window_no_order_with_annotation.sql' has fewer than 3 hyphen-separa... |
 | `window_ranked_orders.sql` | <file> | MISSING_GROUP_BY | error | no | Aggregate function mixed with non-aggregated columns without GROUP BY |
 | `window_ranked_orders.sql` | <file> | WINDOW_NON_UNIQUE_ORDER | warning | no | ROW_NUMBER() ORDER BY (order_date) may not be unique within partition |
 | `window_ranked_orders.sql` | <file> | MISSING_SOURCE_VERSION | info | no | Filename 'window_ranked_orders.sql' has fewer than 3 hyphen-separated parts; ... |
 
 ## Mapping coverage
 
-**181/198** output columns have a resolved source attribute (91%)
+**193/210** output columns have a resolved source attribute (92%)
 
 ## Cross-file lineage
 
@@ -293,6 +301,7 @@ flowchart LR
     distinct_multi_column["distinct_multi_column<br/><i>distinct_multi_column.sql</i>"]
     except_subscribed_customers["except_subscribed_customers<br/><i>except_subscribed_customers.sql</i>"]
     filtered_high_value["filtered_high_value<br/><i>filtered_high_value.sql</i>"]
+    full_outer_with_coalesce["full_outer_with_coalesce<br/><i>full_outer_with_coalesce.sql</i>"]
     having_top_spenders["having_top_spenders<br/><i>having_top_spenders.sql</i>"]
     lateral_unnest["lateral_unnest<br/><i>lateral_unnest.sql</i>"]
     nested_union_except["nested_union_except<br/><i>nested_union_except.sql</i>"]
@@ -305,6 +314,7 @@ flowchart LR
     union_distinct_skipped["union_distinct_skipped<br/><i>union_distinct_skipped.sql</i>"]
     union_revenue_breakdown["union_revenue_breakdown<br/><i>union_revenue_breakdown.sql</i>"]
     union_with_layering["union_with_layering<br/><i>union_with_layering.sql</i>"]
+    window_no_order_with_annotation["window_no_order_with_annotation<br/><i>window_no_order_with_annotation.sql</i>"]
     window_ranked_orders["window_ranked_orders<br/><i>window_ranked_orders.sql</i>"]
   end
   raw_customers --> stg_customers
@@ -340,6 +350,7 @@ flowchart LR
   ext_raw_customer --> distinct_multi_column
   ext_raw_customer --> except_subscribed_customers
   ext_raw_customer --> filtered_high_value
+  ext_raw_customer --> full_outer_with_coalesce
   ext_raw_customer --> having_top_spenders
   ext_raw_customer --> lateral_unnest
   ext_raw_customer --> nested_union_except
@@ -368,6 +379,7 @@ flowchart LR
   ext_raw_orders --> combo_union_valuations
   ext_raw_orders --> except_subscribed_customers
   ext_raw_orders --> filtered_high_value
+  ext_raw_orders --> full_outer_with_coalesce
   ext_raw_orders --> having_top_spenders
   ext_raw_orders --> lateral_unnest
   ext_raw_orders --> nested_union_except
@@ -378,6 +390,7 @@ flowchart LR
   ext_raw_orders --> union_branch_with_user_cte
   ext_raw_orders --> union_revenue_breakdown
   ext_raw_orders --> union_with_layering
+  ext_raw_orders --> window_no_order_with_annotation
   ext_raw_orders --> window_ranked_orders
 ```
 
@@ -403,6 +416,7 @@ flowchart LR
 | `distinct_multi_column.sql` | distinct_multi_column | 0 | — |
 | `except_subscribed_customers.sql` | except_subscribed_customers | 0 | — |
 | `filtered_high_value.sql` | filtered_high_value | 0 | — |
+| `full_outer_with_coalesce.sql` | full_outer_with_coalesce | 0 | — |
 | `having_top_spenders.sql` | having_top_spenders | 0 | — |
 | `lateral_unnest.sql` | lateral_unnest | 0 | — |
 | `nested_union_except.sql` | nested_union_except | 0 | — |
@@ -418,4 +432,5 @@ flowchart LR
 | `union_distinct_skipped.sql` | union_distinct_skipped | 0 | — |
 | `union_revenue_breakdown.sql` | union_revenue_breakdown | 0 | — |
 | `union_with_layering.sql` | union_with_layering | 0 | — |
+| `window_no_order_with_annotation.sql` | window_no_order_with_annotation | 0 | — |
 | `window_ranked_orders.sql` | window_ranked_orders | 0 | — |

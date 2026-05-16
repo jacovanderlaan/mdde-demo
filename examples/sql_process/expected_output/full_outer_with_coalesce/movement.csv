@@ -1,0 +1,7 @@
+"target_model_name","target_table_name","target_column_name","source_model_name","source_table_name","source_column_name","derived_indicator","movement_expression","dependency_type","source_version"
+"Converter","full_outer_with_coalesce","customer_id","RAW","customer","customer_id","true","COALESCE(c.customer_id, o.customer_id) AS customer_id","strict",""
+"Converter","full_outer_with_coalesce","customer_id","RAW","orders","customer_id","true","COALESCE(c.customer_id, o.customer_id) AS customer_id","strict",""
+"Converter","full_outer_with_coalesce","country","RAW","customer","country","false","c.country AS country","strict",""
+"Converter","full_outer_with_coalesce","email","RAW","customer","email","false","c.email AS email","strict",""
+"Converter","full_outer_with_coalesce","order_id","RAW","orders","order_id","false","o.order_id AS order_id","strict",""
+"Converter","full_outer_with_coalesce","amount","RAW","orders","amount","false","o.amount AS amount","strict",""

@@ -43,6 +43,7 @@ import json
 import os
 import re
 import sys
+import time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -177,7 +178,7 @@ def load_metadata(input_dir: Path, override: Optional[Path]) -> MetadataSchema:
 # Entity-level annotations live in header comments above the
 # CREATE/SELECT statement.
 _ENTITY_ANNOTATION_RE = re.compile(
-    r"--\s*@mdde-(?P<key>entity|layer|stereotype|description|domain)\s*:\s*"
+    r"--\s*@mdde-(?P<key>entity|layer|stereotype|description|domain|order-by)\s*:\s*"
     r"(?P<value>.+?)\s*$",
     re.MULTILINE,
 )
@@ -826,6 +827,311 @@ def _make_cte_name(
 
 
 # -----------------------------------------------------------------------------
+# FULL OUTER JOIN + COALESCE → three-CTE UNION ALL pattern
+# -----------------------------------------------------------------------------
+#
+# A common shape we see at customer sites is:
+#
+#     SELECT
+#         COALESCE(a.key, b.key)  AS key,
+#         a.value AS value_a,
+#         b.value AS value_b,
+#         ...
+#     FROM left_t a
+#     FULL OUTER JOIN right_t b ON a.key = b.key
+#
+# That's hard to reason about: COALESCE hides which side a row came
+# from, and downstream consumers can't tell whether a NULL means
+# "missing in left" or "missing in right". Rewrite into three CTEs +
+# UNION ALL so each side is named and tagged:
+#
+#     WITH unique_rows_from_<a> AS (
+#       SELECT ... 'a' AS source_ind
+#       FROM left_t a LEFT JOIN right_t b ON ...
+#       WHERE b.<key> IS NULL
+#     ),
+#     unique_rows_from_<b> AS (
+#       SELECT ... 'b' AS source_ind
+#       FROM right_t b LEFT JOIN left_t a ON ...
+#       WHERE a.<key> IS NULL
+#     ),
+#     matching_rows AS (
+#       SELECT ... 'both' AS source_ind
+#       FROM left_t a INNER JOIN right_t b ON ...
+#     )
+#     SELECT * FROM unique_rows_from_<a>
+#     UNION ALL SELECT * FROM unique_rows_from_<b>
+#     UNION ALL SELECT * FROM matching_rows
+#
+# Scope:
+#   - Fires only when at least one outer projection is
+#     ``COALESCE(a.x, b.x)`` matching the join keys (so the COALESCE
+#     was being used to merge the FULL OUTER's columns).
+#   - Single FULL OUTER JOIN at the top-level only. Multi-FULL-OUTER
+#     chains and FULL OUTER inside a CTE are left alone.
+#   - The projection list is preserved column-for-column in each
+#     branch. ``COALESCE(a.x, b.x)`` becomes ``a.x`` in the unique-a
+#     branch, ``b.x`` in the unique-b branch, and ``a.x`` in
+#     matching (where both sides are non-null and equal).
+#   - Columns from only one side (e.g., ``a.value AS value_a``) are
+#     projected as NULL in the OTHER side's branch — so the
+#     UNION ALL stays column-aligned.
+
+
+def _is_coalesce_of_join_columns(
+    proj: exp.Expression,
+    alias_a: str,
+    alias_b: str,
+) -> bool:
+    """True if ``proj`` is `COALESCE(a.X, b.X)` (or its Alias) where
+    both arguments are columns from the two aliases — i.e., merging
+    the same logical column from both sides of a FULL OUTER JOIN."""
+    inner = proj.this if isinstance(proj, exp.Alias) else proj
+    if not isinstance(inner, exp.Coalesce):
+        return False
+    args = [inner.this] + (inner.expressions or [])
+    if len(args) != 2:
+        return False
+    cols = [a for a in args if isinstance(a, exp.Column)]
+    if len(cols) != 2:
+        return False
+    tables = {c.table for c in cols if c.table}
+    return tables == {alias_a, alias_b}
+
+
+def rewrite_full_outer_with_coalesce(
+    sql: str,
+    findings: List[QualityFinding],
+    log: "TransformLog",
+) -> Tuple[str, List[QualityFinding]]:
+    """Rewrite ``FULL OUTER JOIN`` + ``COALESCE`` into a three-CTE
+    UNION ALL pattern with explicit `source_ind` tags. Fail-soft.
+    """
+    try:
+        statements = sqlglot.parse(sql, read=None)
+    except (sqlglot.errors.ParseError, sqlglot.errors.TokenError):
+        return sql, findings
+    if not statements or statements[0] is None:
+        return sql, findings
+
+    root = statements[0]
+    if isinstance(root, exp.Create) and root.this:
+        target = root.expression or root.this
+    elif isinstance(root, exp.Select):
+        target = root
+    else:
+        target = root.find(exp.Select) if hasattr(root, "find") else None
+    if not isinstance(target, exp.Select):
+        return sql, findings
+
+    # Look for a top-level FULL OUTER JOIN. We support exactly ONE
+    # such join — chains of FULL OUTERs are out of scope.
+    joins = target.args.get("joins") or []
+    full_outer_joins = [
+        j for j in joins
+        if (j.args.get("side") or "").upper() == "FULL"
+        and (j.args.get("kind") or "").upper() == "OUTER"
+    ]
+    if len(full_outer_joins) != 1:
+        return sql, findings
+    if len(joins) != 1:  # Other joins in the mix — bail.
+        return sql, findings
+    fo_join = full_outer_joins[0]
+
+    on_clause = fo_join.args.get("on")
+    if on_clause is None:
+        return sql, findings
+
+    # Identify the two side aliases (left = FROM, right = JOIN).
+    from_clause = target.args.get("from_") or target.args.get("from")
+    if from_clause is None:
+        return sql, findings
+    left_tbl = from_clause.this if isinstance(from_clause.this, exp.Table) else None
+    right_tbl = fo_join.this if isinstance(fo_join.this, exp.Table) else None
+    if not isinstance(left_tbl, exp.Table) or not isinstance(right_tbl, exp.Table):
+        return sql, findings
+    alias_a = left_tbl.alias or left_tbl.name
+    alias_b = right_tbl.alias or right_tbl.name
+    if not alias_a or not alias_b:
+        return sql, findings
+
+    # Must have at least one COALESCE(a.x, b.x) projection.
+    outer_projections = list(target.expressions)
+    if not any(
+        _is_coalesce_of_join_columns(p, alias_a, alias_b)
+        for p in outer_projections
+    ):
+        return sql, findings
+
+    # CTE names. Use source table NAME (without alias) so the labels
+    # are stable across rewrites.
+    a_name = left_tbl.name or alias_a
+    b_name = right_tbl.name or alias_b
+    cte_a_name = f"unique_rows_from_{a_name}"
+    cte_b_name = f"unique_rows_from_{b_name}"
+    cte_match_name = "matching_rows"
+
+    def _build_branch_projections(
+        side: str,  # 'a' | 'b' | 'both'
+    ) -> List[exp.Expression]:
+        """Re-project the outer SELECT's projection list for one of
+        the three branches. COALESCE(a.x, b.x) collapses to the
+        non-null side. Columns referencing only the OTHER side
+        become NULL in this branch (so the UNION stays column-aligned).
+        """
+        new_projs: List[exp.Expression] = []
+        for orig in outer_projections:
+            inner = orig.this if isinstance(orig, exp.Alias) else orig
+            out_name = orig.alias if isinstance(orig, exp.Alias) else None
+
+            # COALESCE(a.x, b.x) → which side wins this branch?
+            if _is_coalesce_of_join_columns(inner, alias_a, alias_b):
+                args = [inner.this] + (inner.expressions or [])
+                col_a = next(c for c in args if isinstance(c, exp.Column) and c.table == alias_a)
+                col_b = next(c for c in args if isinstance(c, exp.Column) and c.table == alias_b)
+                if side == "a":
+                    chosen = col_a.copy()
+                elif side == "b":
+                    chosen = col_b.copy()
+                else:  # both
+                    chosen = col_a.copy()
+                if out_name:
+                    new_projs.append(exp.alias_(chosen, out_name))
+                else:
+                    new_projs.append(chosen)
+                continue
+
+            # Plain column ref — check which side it's from.
+            referenced_aliases = {
+                c.table for c in orig.find_all(exp.Column) if c.table
+            }
+            if side == "a":
+                # Columns from b become NULL.
+                if alias_b in referenced_aliases and alias_a not in referenced_aliases:
+                    null_ref = exp.Null()
+                    if out_name:
+                        new_projs.append(exp.alias_(null_ref, out_name))
+                    else:
+                        new_projs.append(null_ref)
+                    continue
+            elif side == "b":
+                if alias_a in referenced_aliases and alias_b not in referenced_aliases:
+                    null_ref = exp.Null()
+                    if out_name:
+                        new_projs.append(exp.alias_(null_ref, out_name))
+                    else:
+                        new_projs.append(null_ref)
+                    continue
+            new_projs.append(orig.copy())
+
+        # Append source_ind tag.
+        tag_value = "both" if side == "both" else side
+        new_projs.append(exp.alias_(exp.Literal.string(tag_value), "source_ind"))
+        return new_projs
+
+    def _build_branch_select(
+        side: str,
+        primary_tbl: exp.Table,
+        other_tbl: exp.Table,
+        is_inner: bool,
+    ) -> exp.Select:
+        sel = exp.Select(expressions=_build_branch_projections(side))
+        sel.set("from_", exp.From(this=primary_tbl.copy()))
+        join_kind = "INNER" if is_inner else "LEFT"
+        join_node = exp.Join(
+            this=other_tbl.copy(),
+            kind=join_kind,
+            on=on_clause.copy(),
+        )
+        sel.set("joins", [join_node])
+
+        # For LEFT joins on the unique-rows side, add WHERE
+        # <other-side>.<key> IS NULL using the FIRST equality leaf
+        # of the ON clause (or any column from the OTHER side).
+        if not is_inner:
+            other_alias = other_tbl.alias or other_tbl.name
+            # Pick the join's other-side column from the ON clause.
+            other_col = None
+            for c in on_clause.find_all(exp.Column):
+                if c.table == other_alias:
+                    other_col = c
+                    break
+            if other_col is not None:
+                sel.set(
+                    "where",
+                    exp.Where(this=exp.Is(this=other_col.copy(), expression=exp.Null())),
+                )
+        return sel
+
+    cte_a = exp.CTE(
+        this=_build_branch_select("a", left_tbl, right_tbl, is_inner=False),
+        alias=exp.TableAlias(this=exp.to_identifier(cte_a_name)),
+    )
+    cte_b = exp.CTE(
+        this=_build_branch_select("b", right_tbl, left_tbl, is_inner=False),
+        alias=exp.TableAlias(this=exp.to_identifier(cte_b_name)),
+    )
+    cte_match = exp.CTE(
+        this=_build_branch_select("both", left_tbl, right_tbl, is_inner=True),
+        alias=exp.TableAlias(this=exp.to_identifier(cte_match_name)),
+    )
+
+    # Build the new outer body: a 3-branch UNION ALL of SELECT *
+    # FROM each new CTE. Left-associative chain.
+    def _sel_star(cte_name: str) -> exp.Select:
+        return exp.Select(expressions=[exp.Star()]).from_(
+            exp.Table(this=exp.to_identifier(cte_name))
+        )
+
+    new_body: exp.Expression = exp.Union(
+        this=_sel_star(cte_a_name),
+        expression=_sel_star(cte_b_name),
+        distinct=False,
+    )
+    new_body = exp.Union(
+        this=new_body,
+        expression=_sel_star(cte_match_name),
+        distinct=False,
+    )
+
+    # Attach the WITH clause. Preserve any existing WITH.
+    existing_with = target.args.get("with_")
+    new_ctes_list = [cte_a, cte_b, cte_match]
+    if existing_with:
+        new_body.set(
+            "with_",
+            exp.With(
+                expressions=list(existing_with.expressions) + new_ctes_list,
+                recursive=False,
+            ),
+        )
+    else:
+        new_body.set(
+            "with_",
+            exp.With(expressions=new_ctes_list, recursive=False),
+        )
+
+    # Swap into the parent statement.
+    if isinstance(root, exp.Create):
+        root.set("expression", new_body)
+        statements[0] = root
+    else:
+        statements[0] = new_body
+
+    log.full_outer_rewritten = True
+
+    try:
+        rendered = "\n".join(
+            s.sql(pretty=True) for s in statements if s is not None
+        )
+        if sql.rstrip().endswith(";") and not rendered.rstrip().endswith(";"):
+            rendered = rendered.rstrip() + ";"
+        return rendered, findings
+    except Exception:  # noqa: BLE001 — fail-soft
+        return sql, findings
+
+
+# -----------------------------------------------------------------------------
 # DISTINCT → ROW_NUMBER() dedup pattern
 # -----------------------------------------------------------------------------
 #
@@ -1074,6 +1380,91 @@ def replace_distinct_with_rownum(
         statements[0] = new_outer
 
     log.distinct_rewritten = True
+
+    try:
+        rendered = "\n".join(
+            s.sql(pretty=True) for s in statements if s is not None
+        )
+        if sql.rstrip().endswith(";") and not rendered.rstrip().endswith(";"):
+            rendered = rendered.rstrip() + ";"
+        return rendered, findings
+    except Exception:  # noqa: BLE001 — fail-soft
+        return sql, findings
+
+
+# -----------------------------------------------------------------------------
+# ROW_NUMBER / RANK without ORDER BY — auto-fix via @mdde-order-by annotation
+# -----------------------------------------------------------------------------
+#
+# ``ROW_NUMBER() OVER (PARTITION BY x)`` without an ORDER BY produces
+# engine-dependent output. The quality check flags it as
+# WINDOW_NO_ORDER. We can auto-fix when the file declares a
+# ``-- @mdde-order-by: <col>[, <col>...]`` annotation; otherwise we
+# leave the warning in place so a human decides which key gives
+# deterministic results.
+#
+# Scope:
+#   - Annotation must be present at the file level.
+#   - Applies to every Window function with no existing ORDER BY in
+#     its OVER clause (whether it's ROW_NUMBER, RANK, DENSE_RANK,
+#     LAG, LEAD, FIRST_VALUE, LAST_VALUE, etc.).
+#   - Windows that already have an ORDER BY are untouched.
+
+
+def apply_window_order_by(
+    sql: str,
+    findings: List[QualityFinding],
+    order_by_annotation: Optional[str],
+    log: "TransformLog",
+) -> Tuple[str, List[QualityFinding]]:
+    """Add ORDER BY <annotation> to every Window function lacking one.
+
+    ``order_by_annotation`` is the raw string from the
+    ``@mdde-order-by`` annotation — comma-separated column names,
+    optional ``ASC``/``DESC`` per column. When None or empty, the
+    transform is a no-op.
+
+    Fail-soft on parse errors.
+    """
+    if not order_by_annotation:
+        return sql, findings
+    try:
+        statements = sqlglot.parse(sql, read=None)
+    except (sqlglot.errors.ParseError, sqlglot.errors.TokenError):
+        return sql, findings
+    if not statements or statements[0] is None:
+        return sql, findings
+
+    # Build the ORDER BY AST once from the annotation string.
+    try:
+        order_by_node = sqlglot.parse_one(
+            f"SELECT 1 ORDER BY {order_by_annotation}",
+            read=None,
+        ).args.get("order")
+    except (sqlglot.errors.ParseError, sqlglot.errors.TokenError):
+        return sql, findings
+    if order_by_node is None:
+        return sql, findings
+
+    rewrote = False
+    for stmt in statements:
+        if stmt is None:
+            continue
+        for win in stmt.find_all(exp.Window):
+            if win.args.get("order"):
+                continue  # Already has ORDER BY.
+            win.set("order", order_by_node.copy())
+            rewrote = True
+
+    if not rewrote:
+        return sql, findings
+
+    # Mark any WINDOW_NO_ORDER findings as auto-fixed.
+    for f in findings:
+        if f.rule == "WINDOW_NO_ORDER":
+            f.auto_fixed = True
+
+    log.window_order_by_applied = True
 
     try:
         rendered = "\n".join(
@@ -3492,6 +3883,8 @@ class TransformLog:
     filtered_cte_extracted: bool = False
     union_branches_extracted: bool = False
     distinct_rewritten: bool = False
+    full_outer_rewritten: bool = False
+    window_order_by_applied: bool = False
     schema_replacements: List[Tuple[str, str]] = field(default_factory=list)
     obsolete_cte_names: List[str] = field(default_factory=list)
     stripped_metadata_columns: List[str] = field(default_factory=list)
@@ -3978,6 +4371,23 @@ def emit_comment_header(
         )
         checklist.append("- [X] DISTINCT replaced by explicit dedup CTEs.")
 
+    if log.full_outer_rewritten:
+        summary.append(
+            "  - Replaced `FULL OUTER JOIN` + `COALESCE` with three "
+            "explicit CTEs (`unique_rows_from_<a>`, "
+            "`unique_rows_from_<b>`, `matching_rows`) UNION ALLed "
+            "with a `source_ind` tag column."
+        )
+        checklist.append("- [X] FULL OUTER + COALESCE restructured into 3 CTEs.")
+
+    if log.window_order_by_applied:
+        summary.append(
+            "  - Added `ORDER BY` (from `@mdde-order-by` annotation) "
+            "to every window function lacking one, producing "
+            "deterministic results."
+        )
+        checklist.append("- [X] Window functions made deterministic via `@mdde-order-by`.")
+
     if log.obsolete_ctes_removed:
         if log.obsolete_cte_names:
             obsolete = ", ".join(f"`{n}`" for n in log.obsolete_cte_names)
@@ -4025,6 +4435,43 @@ def emit_comment_header(
     return "\n".join(lines) + "\n"
 
 
+# Profile timings — populated when ``--profile`` is in effect. Keyed
+# by transform name → cumulative seconds across all files in the run.
+# Reset per ``process_folder()`` invocation.
+_PROFILE_TIMINGS: Dict[str, float] = {}
+_PROFILE_ENABLED: bool = False
+
+
+def _reset_profile() -> None:
+    """Reset the global timings + enable flag."""
+    _PROFILE_TIMINGS.clear()
+
+
+def _profile_record(name: str, elapsed: float) -> None:
+    """Add ``elapsed`` seconds to the cumulative bucket for ``name``."""
+    if not _PROFILE_ENABLED:
+        return
+    _PROFILE_TIMINGS[name] = _PROFILE_TIMINGS.get(name, 0.0) + elapsed
+
+
+class _ProfileBlock:
+    """Context manager that records elapsed time under a transform name."""
+    __slots__ = ("_name", "_t0")
+
+    def __init__(self, name: str) -> None:
+        self._name = name
+        self._t0 = 0.0
+
+    def __enter__(self) -> "_ProfileBlock":
+        if _PROFILE_ENABLED:
+            self._t0 = time.perf_counter()
+        return self
+
+    def __exit__(self, *exc) -> None:
+        if _PROFILE_ENABLED:
+            _profile_record(self._name, time.perf_counter() - self._t0)
+
+
 def apply_auto_fixes(
     sql: str,
     findings: List[QualityFinding],
@@ -4032,6 +4479,7 @@ def apply_auto_fixes(
     optimize_config: Optional["OptimizeConfig"] = None,
     detection_only: bool = False,
     entity_hint: str = "result",
+    order_by_annotation: Optional[str] = None,
 ) -> Tuple[str, List[QualityFinding], TransformLog]:
     """Rewrite the SQL to fix the safe issues. Mutates findings in
     place, marking the auto-fixed ones. Returns the rewritten SQL,
@@ -4096,6 +4544,30 @@ def apply_auto_fixes(
             out, findings = lift_subqueries_to_ctes(out, findings)
             if out != before:
                 log.subqueries_lifted = True
+
+        # Rewrite ``FULL OUTER JOIN`` + ``COALESCE`` into three
+        # explicit CTEs + UNION ALL with `source_ind` tag.
+        # Runs AFTER subquery lifting (so derived-table shapes
+        # settle) and BEFORE DISTINCT/pushdown so the resulting
+        # three CTEs can themselves be layered.
+        if rule_on("full_outer_rewrite"):
+            before = out
+            out, findings = rewrite_full_outer_with_coalesce(
+                out, findings, log,
+            )
+            if out != before:
+                log.full_outer_rewritten = True
+
+        # Add ORDER BY to every window function lacking one, using
+        # the file's ``@mdde-order-by`` annotation. No-op when the
+        # annotation isn't present.
+        if rule_on("window_order_by"):
+            before = out
+            out, findings = apply_window_order_by(
+                out, findings, order_by_annotation, log,
+            )
+            if out != before:
+                log.window_order_by_applied = True
 
         # Replace ``SELECT DISTINCT`` with an explicit two-CTE dedup
         # pattern (``<entity>_ranked`` + ``<entity>_deduped``).
@@ -4912,6 +5384,8 @@ class OptimizeConfig:
         "obsolete_cte_removal":      True,
         "metadata_column_strip":     True,
         "subquery_lift":             True,
+        "full_outer_rewrite":        True,
+        "window_order_by":           True,
         "distinct_rewrite":          True,
         "source_pushdown":           True,
         "joined_cte":                True,
@@ -5663,12 +6137,17 @@ def emit_mermaid_graph(parsed_files: List[ParsedFile]) -> str:
 def emit_report(
     parsed_files: List[ParsedFile],
     findings_per_file: Dict[str, List[QualityFinding]],
+    timings_per_file: Optional[Dict[str, Dict[str, float]]] = None,
 ) -> str:
     """Markdown summary of the run.
 
     Timestamp is omitted so the report is byte-identical across
     re-runs on the same input. CI consumers can stamp it externally
     if they need provenance.
+
+    When ``timings_per_file`` is provided (i.e., the run was profiled),
+    a ``## Profile`` section is appended with phase-level timing
+    totals plus the slowest 10 files by total elapsed time.
     """
     lines: List[str] = []
     lines.append("# sql_process — run report")
@@ -5824,6 +6303,46 @@ def emit_report(
             f"{', '.join(sorted(all_flags)) if all_flags else '—'} |"
         )
     lines.append("")
+
+    # ---- Profile section (only when timings were collected) -----------
+    if timings_per_file:
+        lines.append("## Profile")
+        lines.append("")
+
+        # Phase totals.
+        phase_totals: Dict[str, float] = {}
+        for fts in timings_per_file.values():
+            for phase, secs in fts.items():
+                phase_totals[phase] = phase_totals.get(phase, 0.0) + secs
+        total_secs = phase_totals.get("total", sum(phase_totals.values()))
+
+        lines.append("Phase totals (cumulative across all files):")
+        lines.append("")
+        lines.append("| Phase | Total (s) | % of total |")
+        lines.append("|---|---:|---:|")
+        for phase in ("parse", "quality", "auto_fix", "total"):
+            secs = phase_totals.get(phase, 0.0)
+            pct = (100.0 * secs / total_secs) if total_secs > 0 else 0.0
+            lines.append(f"| {phase} | {secs:.3f} | {pct:.1f}% |")
+        lines.append("")
+
+        # Slowest 10 files by total.
+        sorted_files = sorted(
+            timings_per_file.items(),
+            key=lambda kv: kv[1].get("total", 0.0),
+            reverse=True,
+        )
+        lines.append("Slowest 10 files (by total elapsed):")
+        lines.append("")
+        lines.append("| File | Parse (s) | Quality (s) | Auto-fix (s) | Total (s) |")
+        lines.append("|---|---:|---:|---:|---:|")
+        for rel_key, fts in sorted_files[:10]:
+            lines.append(
+                f"| `{rel_key}` | {fts.get('parse', 0):.3f} | "
+                f"{fts.get('quality', 0):.3f} | {fts.get('auto_fix', 0):.3f} | "
+                f"{fts.get('total', 0):.3f} |"
+            )
+        lines.append("")
 
     return "\n".join(lines)
 
@@ -6131,6 +6650,7 @@ def process_folder(
     optimize_config: Optional[OptimizeConfig] = None,
     file_config: Optional[FileConfig] = None,
     detection_only: bool = False,
+    profile: bool = False,
 ) -> int:
     """Run the pipeline. Returns the number of files processed.
 
@@ -6170,6 +6690,13 @@ def process_folder(
 
     parsed_files: List[ParsedFile] = []
     findings_per_file: Dict[str, List[QualityFinding]] = {}
+    # When profiling, collect per-file elapsed seconds for parse,
+    # quality, auto-fix, write phases plus a total. Surfaced in
+    # report.md's `## Profile` section.
+    timings_per_file: Dict[str, Dict[str, float]] = {}
+    global _PROFILE_ENABLED
+    _PROFILE_ENABLED = profile
+    _reset_profile()
 
     for sql_path in sql_files:
         # Preserve subfolder structure to avoid filename collisions
@@ -6180,22 +6707,40 @@ def process_folder(
         rel_key = str(rel).replace("\\", "/")
         query_dir = output_dir / rel.parent / rel.stem
 
+        file_t0 = time.perf_counter() if profile else 0.0
+
+        t_parse = time.perf_counter() if profile else 0.0
         pf = parse_file(
             sql_path,
             metadata=metadata if metadata else None,
             union_separator=union_separator,
         )
         parsed_files.append(pf)
+        elapsed_parse = (time.perf_counter() - t_parse) if profile else 0.0
 
+        t_quality = time.perf_counter() if profile else 0.0
         findings = run_quality_checks(pf, customer_config=customer_config)
+        elapsed_quality = (time.perf_counter() - t_quality) if profile else 0.0
+
+        t_fix = time.perf_counter() if profile else 0.0
         optimized_sql, findings, transform_log = apply_auto_fixes(
             pf.raw_sql, findings,
             customer_config=customer_config,
             optimize_config=opt_cfg,
             detection_only=detection_only,
             entity_hint=pf.entity_name,
+            order_by_annotation=pf.annotations.entity.get("order-by"),
         )
+        elapsed_fix = (time.perf_counter() - t_fix) if profile else 0.0
         findings_per_file[rel_key] = findings
+
+        if profile:
+            timings_per_file[rel_key] = {
+                "parse":     elapsed_parse,
+                "quality":   elapsed_quality,
+                "auto_fix":  elapsed_fix,
+                "total":     time.perf_counter() - file_t0,
+            }
 
         # Customer rule 8: pre-pend the conversion-summary comment
         # header, auto-filled from the TransformLog. Only when at
@@ -6249,7 +6794,11 @@ def process_folder(
 
     write_text(
         output_dir / "report.md",
-        emit_report(parsed_files, findings_per_file),
+        emit_report(
+            parsed_files,
+            findings_per_file,
+            timings_per_file=timings_per_file if profile else None,
+        ),
     )
 
     # Diff against a previous output snapshot if requested.
@@ -6354,6 +6903,16 @@ def main(argv: Optional[List[str]] = None) -> int:
             "misbehaves on real customer SQL."
         ),
     )
+    parser.add_argument(
+        "--profile",
+        action="store_true",
+        help=(
+            "Collect per-file timing (parse / quality / auto-fix / "
+            "total) and surface phase totals + the slowest 10 files "
+            "in `report.md` under a `## Profile` section. Useful when "
+            "scaling to thousands of files."
+        ),
+    )
     args = parser.parse_args(argv)
 
     # Load YAML config FIRST so its `run` section can supply
@@ -6421,6 +6980,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         optimize_config=cfg.optimize,
         file_config=cfg.files,
         detection_only=args.detection_only,
+        profile=args.profile,
     )
 
     # List the optional artefacts that were actually emitted, so the
