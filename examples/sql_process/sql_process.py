@@ -73,7 +73,7 @@ _HERE = (
 # When you edit the file locally without committing, this stamp may
 # lag behind your changes — `--version` still prints both the stamp
 # and the file's mtime so you can spot drift.
-__version__ = "192caf00 (2026-05-18)"  # auto-updated on commit  ## STAMP-MARKER ##
+__version__ = "1319747f (2026-05-18)"  # auto-updated on commit  ## STAMP-MARKER ##
 def _version_string() -> str:
     """Return a human-readable version banner.
 

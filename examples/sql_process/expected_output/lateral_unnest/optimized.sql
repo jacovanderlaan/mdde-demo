@@ -8,7 +8,7 @@
 
 /*
 Migration Details:
-- sql_process Version: 192caf00 (2026-05-18)
+- sql_process Version: 1319747f (2026-05-18)
 - Original SQL File: lateral_unnest.sql
 - Target SQL File:  optimized.sql
 - Summary of Changes:
