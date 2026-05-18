@@ -1,6 +1,6 @@
 # sql_process — run report
 
-Files processed: **37**
+Files processed: **38**
 
 ## Files
 
@@ -41,12 +41,13 @@ Files processed: **37**
 | `union_distinct_skipped.sql` | union_distinct_skipped | business | yes | 0 | 1 | 2 | 7 |
 | `union_revenue_breakdown.sql` | union_revenue_breakdown | business | yes | 0 | 1 | 4 | 3 |
 | `union_with_layering.sql` | union_with_layering | business | yes | 0 | 2 | 4 | 9 |
+| `unquoted_y_n_literals.sql` | unquoted_y_n_literals | business | yes | 0 | 1 | 4 | 1 |
 | `window_no_order_with_annotation.sql` | window_no_order_with_annotation | business | yes | 0 | 1 | 7 | 4 |
 | `window_ranked_orders.sql` | window_ranked_orders | business | yes | 0 | 2 | 8 | 3 |
 
 ## Quality findings
 
-**Total:** 214 (error=9, warning=67, info=138)  
+**Total:** 215 (error=9, warning=67, info=139)  
 **Auto-fixed:** 15
 
 | File | Location | Rule | Severity | Auto-fixed | Message |
@@ -258,6 +259,7 @@ Files processed: **37**
 | `union_with_layering.sql` | <file> | GROUPBY_NOT_ISOLATED | info | no | GROUP BY combined with WHERE and JOINs in a single SELECT |
 | `union_with_layering.sql` | <file> | GROUPBY_NOT_ISOLATED | info | no | GROUP BY combined with WHERE and JOINs in a single SELECT |
 | `union_with_layering.sql` | <file> | MISSING_SOURCE_VERSION | info | no | Filename 'union_with_layering.sql' has fewer than 3 hyphen-separated parts; m... |
+| `unquoted_y_n_literals.sql` | <file> | MISSING_SOURCE_VERSION | info | no | Filename 'unquoted_y_n_literals.sql' has fewer than 3 hyphen-separated parts;... |
 | `window_no_order_with_annotation.sql` | <file> | MISSING_GROUP_BY | error | no | Aggregate function mixed with non-aggregated columns without GROUP BY |
 | `window_no_order_with_annotation.sql` | <file> | WINDOW_NO_ORDER | error | yes | ROW_NUMBER() without ORDER BY - results are non-deterministic |
 | `window_no_order_with_annotation.sql` | <file> | LAG_LEAD_NO_ORDER | error | no | LAG() without ORDER BY - results are non-deterministic |
@@ -268,7 +270,7 @@ Files processed: **37**
 
 ## Mapping coverage
 
-**204/221** output columns have a resolved source attribute (92%)
+**208/225** output columns have a resolved source attribute (92%)
 
 ## Cross-file lineage
 
@@ -330,6 +332,7 @@ flowchart LR
     union_distinct_skipped["union_distinct_skipped<br/><i>union_distinct_skipped.sql</i>"]
     union_revenue_breakdown["union_revenue_breakdown<br/><i>union_revenue_breakdown.sql</i>"]
     union_with_layering["union_with_layering<br/><i>union_with_layering.sql</i>"]
+    unquoted_y_n_literals["unquoted_y_n_literals<br/><i>unquoted_y_n_literals.sql</i>"]
     window_no_order_with_annotation["window_no_order_with_annotation<br/><i>window_no_order_with_annotation.sql</i>"]
     window_ranked_orders["window_ranked_orders<br/><i>window_ranked_orders.sql</i>"]
   end
@@ -379,6 +382,7 @@ flowchart LR
   ext_raw_customer --> source_derivations
   ext_raw_customer --> union_distinct_skipped
   ext_raw_customer --> union_with_layering
+  ext_raw_customer --> unquoted_y_n_literals
   ext_raw_customer --> window_ranked_orders
   ext_raw_fp --> metadata_in_subqueries
   ext_raw_loans --> combo_at_risk_customers
@@ -453,5 +457,6 @@ flowchart LR
 | `union_distinct_skipped.sql` | union_distinct_skipped | 0 | — |
 | `union_revenue_breakdown.sql` | union_revenue_breakdown | 0 | — |
 | `union_with_layering.sql` | union_with_layering | 0 | — |
+| `unquoted_y_n_literals.sql` | unquoted_y_n_literals | 0 | — |
 | `window_no_order_with_annotation.sql` | window_no_order_with_annotation | 0 | — |
 | `window_ranked_orders.sql` | window_ranked_orders | 0 | — |

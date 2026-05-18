@@ -109,6 +109,20 @@ optimize:
   # Currently supports: "," (commas at the start of a SELECT line).
   union_separator: ","
 
+  # Pre-parse: wrap every standalone occurrence of these tokens in
+  # single quotes before parsing. Useful for customer SQL that
+  # writes bare identifiers as string literals, e.g.
+  #   CASE WHEN entity = 'ABC' THEN Y ELSE N END AS active
+  # would be parsed by sqlglot as `Y`/`N` columns and break the
+  # rewrite. Listing them here turns them into 'Y'/'N' literals
+  # before parsing. Word-boundary matching only — does NOT touch
+  # the same letter inside longer identifiers (Year, MyTable, etc.).
+  # Default empty (no substitution). Repo example enables Y/N so
+  # the `unquoted_y_n_literals.sql` fixture exercises the path.
+  unquoted_literals:
+    - Y
+    - N
+
   # Per-rule toggles. Every transform defaults to true; set a key to
   # false to skip it. Skipped rules ALSO drop out of the Genie
   # instruction text so the prompt only lists what should be applied.

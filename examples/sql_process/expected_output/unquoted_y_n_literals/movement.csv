@@ -1,0 +1,5 @@
+"target_model_name","target_table_name","target_column_name","source_model_name","source_table_name","source_column_name","derived_indicator","movement_expression","dependency_type","source_version"
+"Converter","unquoted_y_n_literals","customer_id","RAW","customer","customer_id","false","customer.customer_id AS customer_id","strict",""
+"Converter","unquoted_y_n_literals","email","RAW","customer","email","false","customer.email AS email","strict",""
+"Converter","unquoted_y_n_literals","has_email","RAW","customer","email","true","CASE WHEN NOT customer.email IS NULL THEN 'Y' ELSE 'N' END AS has_email","strict",""
+"Converter","unquoted_y_n_literals","is_benelux","RAW","customer","country","true","CASE WHEN customer.country = 'NL' THEN 'Y' WHEN customer.country = 'BE' THEN 'Y' ELSE 'N' END AS is_benelux","strict",""

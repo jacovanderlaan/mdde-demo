@@ -434,10 +434,106 @@ def _pre_parse_union_separator(sql: str, separator: Optional[str]) -> str:
     return "".join(out)
 
 
+def _pre_parse_unquoted_literals(
+    sql: str,
+    literals: Optional[List[str]],
+) -> str:
+    """Wrap every standalone occurrence of each token in ``literals``
+    with single quotes BEFORE parsing.
+
+    Used for customer SQL that writes ``CASE WHEN entity = 'ABC'
+    THEN Y ELSE N END`` where ``Y`` and ``N`` are meant to be string
+    literals but sqlglot parses them as identifiers. With
+    ``literals=['Y', 'N']`` the input becomes
+    ``CASE WHEN entity = 'ABC' THEN 'Y' ELSE 'N' END`` which parses
+    correctly as a CASE returning a string.
+
+    Replacement is scope-aware:
+    - Inside ``'...'`` / ``"..."`` strings: left alone.
+    - Inside ``-- ...`` / ``/* ... */`` comments: left alone.
+    - Inside a longer identifier (``Year``, ``MyTable``): left alone
+      (word-boundary matching).
+
+    Returns the input unchanged when ``literals`` is empty/None.
+    """
+    if not literals:
+        return sql
+    # Build one regex with alternation; escape each literal for safety
+    # even though they're typically single letters.
+    pattern = re.compile(
+        r"\b(" + "|".join(re.escape(lit) for lit in literals) + r")\b",
+    )
+
+    out: List[str] = []
+    in_string: Optional[str] = None
+    in_line_comment = False
+    in_block_comment = False
+    i = 0
+    n = len(sql)
+    while i < n:
+        ch = sql[i]
+        # Line comment.
+        if in_line_comment:
+            out.append(ch)
+            if ch == "\n":
+                in_line_comment = False
+            i += 1
+            continue
+        # Block comment.
+        if in_block_comment:
+            out.append(ch)
+            if ch == "*" and i + 1 < n and sql[i + 1] == "/":
+                out.append("/")
+                in_block_comment = False
+                i += 2
+            else:
+                i += 1
+            continue
+        # Inside a string literal.
+        if in_string is not None:
+            out.append(ch)
+            if ch == in_string and (i == 0 or sql[i - 1] != "\\"):
+                in_string = None
+            i += 1
+            continue
+        # Detect entry into a string / comment.
+        if ch in ('"', "'"):
+            in_string = ch
+            out.append(ch)
+            i += 1
+            continue
+        if ch == "-" and i + 1 < n and sql[i + 1] == "-":
+            in_line_comment = True
+            out.append(ch)
+            i += 1
+            continue
+        if ch == "/" and i + 1 < n and sql[i + 1] == "*":
+            in_block_comment = True
+            out.append(ch)
+            out.append("*")
+            i += 2
+            continue
+        # Scan a maximal run of non-special characters and apply the
+        # word-boundary regex to it. Stop when we hit a string /
+        # comment opener so we don't accidentally cross into them.
+        j = i
+        while j < n and sql[j] not in ('"', "'") and not (
+            sql[j] == "-" and j + 1 < n and sql[j + 1] == "-"
+        ) and not (
+            sql[j] == "/" and j + 1 < n and sql[j + 1] == "*"
+        ):
+            j += 1
+        segment = sql[i:j]
+        out.append(pattern.sub(r"'\1'", segment))
+        i = j
+    return "".join(out)
+
+
 def parse_file(
     path: Path,
     metadata: Optional[MetadataSchema] = None,
     union_separator: Optional[str] = None,
+    unquoted_literals: Optional[List[str]] = None,
 ) -> ParsedFile:
     """Read a SQL file, extract annotations, parse with sqlglot.
 
@@ -456,6 +552,8 @@ def parse_file(
     raw_sql = path.read_text(encoding="utf-8")
     if union_separator:
         raw_sql = _pre_parse_union_separator(raw_sql, union_separator)
+    if unquoted_literals:
+        raw_sql = _pre_parse_unquoted_literals(raw_sql, unquoted_literals)
     annotations = extract_annotations(raw_sql)
     entity_name = annotations.entity.get("entity") or path.stem
 
@@ -5457,6 +5555,13 @@ class OptimizeConfig:
     SQL uses a comma between top-level SELECTs to mean UNION ALL,
     this tells the script to convert each occurrence before parsing.
 
+    ``unquoted_literals`` is a pre-parse substitution for customer SQL
+    that uses bare identifiers as string literals (e.g.
+    ``CASE WHEN x = 'A' THEN Y ELSE N END`` where ``Y`` / ``N`` are
+    meant to be string literals). Every listed token is wrapped in
+    single quotes wherever it appears as a standalone word (between
+    word boundaries) before parsing. Default empty (no substitution).
+
     ``enabled`` is a per-rule toggle map. Every key defaults to True;
     set a key to False in the YAML to skip that transform. Skipped
     transforms also drop out of the Genie instruction text so the
@@ -5464,6 +5569,7 @@ class OptimizeConfig:
     """
     table_qualifier: Optional[str] = "schema_identifier_ssf_snapshot"
     union_separator: Optional[str] = ","
+    unquoted_literals: List[str] = field(default_factory=list)
     enabled: Dict[str, bool] = field(default_factory=lambda: {
         "where_true_removed":        True,
         "schema_replacement":        True,
@@ -5601,9 +5707,11 @@ def load_config(path: Optional[Path]) -> PipelineConfig:
         for key, val in yaml_enabled.items():
             if key in merged_enabled:
                 merged_enabled[key] = bool(val)
+        ul_raw = op.get("unquoted_literals")
         cfg.optimize = OptimizeConfig(
             table_qualifier=op.get("table_qualifier") or None,
             union_separator=op.get("union_separator") or None,
+            unquoted_literals=list(ul_raw) if ul_raw is not None else [],
             enabled=merged_enabled,
         )
 
@@ -6755,6 +6863,7 @@ def process_folder(
     opt_cfg = optimize_config or OptimizeConfig()
     file_cfg = file_config or FileConfig()
     union_separator = opt_cfg.union_separator
+    unquoted_literals = list(opt_cfg.unquoted_literals or [])
 
     sql_files = _select_input_files(
         input_dir,
@@ -6801,6 +6910,7 @@ def process_folder(
             sql_path,
             metadata=metadata if metadata else None,
             union_separator=union_separator,
+            unquoted_literals=unquoted_literals,
         )
         parsed_files.append(pf)
         elapsed_parse = (time.perf_counter() - t_parse) if profile else 0.0
