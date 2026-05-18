@@ -4108,6 +4108,15 @@ def apply_schema_replacement(
     """
     if not legacy_schemas:
         return sql
+    # Defensive: replacement should be a string. Skip if malformed.
+    if not isinstance(replacement, str) or not replacement:
+        print(
+            f"apply_schema_replacement: replacement should be a non-empty "
+            f"string, got {type(replacement).__name__} ({replacement!r}) "
+            f"— skipping.",
+            file=sys.stderr,
+        )
+        return sql
     try:
         statements = sqlglot.parse(sql, read=None)
     except (sqlglot.errors.ParseError, sqlglot.errors.TokenError):
@@ -4289,6 +4298,15 @@ def apply_table_qualifier(
     walking the AST itself.
     """
     if not qualifier:
+        return sql
+    # Defensive: a malformed YAML can produce a dict/list here. Skip
+    # rather than crash inside sqlglot.
+    if not isinstance(qualifier, str):
+        print(
+            f"apply_table_qualifier: expected string, got "
+            f"{type(qualifier).__name__} ({qualifier!r}) — skipping.",
+            file=sys.stderr,
+        )
         return sql
     try:
         statements = sqlglot.parse(sql, read=None)
@@ -5713,15 +5731,49 @@ def load_config(path: Optional[Path]) -> PipelineConfig:
         mb_raw = rl.get("metadata_blacklist")
         ob_raw = rl.get("obsolete_cte_names")
         ls_raw = rl.get("legacy_schemas")
+
+        # Coerce scalar string-keys defensively. ``str(dict)`` would
+        # otherwise propagate something like "{'name': 'foo'}" into
+        # the pipeline and crash sqlglot's identifier helpers.
+        def _coerce_rule_scalar(key: str, value: Any, default: str) -> str:
+            if value is None:
+                return default
+            if isinstance(value, str):
+                return value
+            print(
+                f"Config: rules.{key} should be a string, got "
+                f"{type(value).__name__} — falling back to {default!r}.",
+                file=sys.stderr,
+            )
+            return default
+
         cfg.rules = CustomerRuleConfig(
-            legacy_schemas=list(ls_raw) if ls_raw is not None else [],
-            replacement_schema=str(rl.get("replacement_schema", cfg.rules.replacement_schema)),
-            date_variable=str(rl.get("date_variable", cfg.rules.date_variable)),
+            legacy_schemas=(
+                [str(x) for x in ls_raw]
+                if isinstance(ls_raw, list)
+                else []
+            ),
+            replacement_schema=_coerce_rule_scalar(
+                "replacement_schema",
+                rl.get("replacement_schema"),
+                cfg.rules.replacement_schema,
+            ),
+            date_variable=_coerce_rule_scalar(
+                "date_variable",
+                rl.get("date_variable"),
+                cfg.rules.date_variable,
+            ),
             metadata_blacklist=(
-                list(mb_raw) if mb_raw is not None else list(cfg.rules.metadata_blacklist)
+                [str(x) for x in mb_raw]
+                if isinstance(mb_raw, list)
+                else list(cfg.rules.metadata_blacklist) if mb_raw is None
+                else []
             ),
             obsolete_cte_names=(
-                list(ob_raw) if ob_raw is not None else list(cfg.rules.obsolete_cte_names)
+                [str(x) for x in ob_raw]
+                if isinstance(ob_raw, list)
+                else list(cfg.rules.obsolete_cte_names) if ob_raw is None
+                else []
             ),
         )
 
@@ -5743,10 +5795,32 @@ def load_config(path: Optional[Path]) -> PipelineConfig:
             if key in merged_enabled:
                 merged_enabled[key] = bool(val)
         ul_raw = op.get("unquoted_literals")
+
+        # Coerce scalar string config values defensively. A YAML
+        # malformatted as ``table_qualifier: {name: foo}`` (a dict)
+        # would otherwise propagate downstream and crash sqlglot's
+        # ``to_identifier()`` with an unhelpful trace. Treat any
+        # non-string, non-None value as None and warn.
+        def _coerce_scalar(key: str, value: Any) -> Optional[str]:
+            if value is None:
+                return None
+            if isinstance(value, str):
+                return value or None
+            print(
+                f"Config: optimize.{key} should be a string, got "
+                f"{type(value).__name__} — ignoring.",
+                file=sys.stderr,
+            )
+            return None
+
         cfg.optimize = OptimizeConfig(
-            table_qualifier=op.get("table_qualifier") or None,
-            union_separator=op.get("union_separator") or None,
-            unquoted_literals=list(ul_raw) if ul_raw is not None else [],
+            table_qualifier=_coerce_scalar("table_qualifier", op.get("table_qualifier")),
+            union_separator=_coerce_scalar("union_separator", op.get("union_separator")),
+            unquoted_literals=(
+                [str(x) for x in ul_raw]
+                if isinstance(ul_raw, list)
+                else []
+            ),
             enabled=merged_enabled,
         )
 
