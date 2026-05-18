@@ -2382,6 +2382,184 @@
       "schemaURL": "https://openlineage.io/spec/2-0-2/OpenLineage.json#/definitions/RunEvent",
       "job": {
         "namespace": "mdde-demo.sql_process",
+        "name": "metadata_in_subqueries"
+      },
+      "inputs": [
+        {
+          "namespace": "mdde-demo.sql_process",
+          "name": "raw.prp"
+        },
+        {
+          "namespace": "mdde-demo.sql_process",
+          "name": "raw.fp"
+        }
+      ],
+      "outputs": [
+        {
+          "namespace": "mdde-demo.sql_process",
+          "name": "metadata_in_subqueries",
+          "facets": {
+            "schema": {
+              "fields": [
+                {
+                  "name": "financing_product_id",
+                  "type": "INFERRED"
+                },
+                {
+                  "name": "financing_product_ssid",
+                  "type": "INFERRED"
+                },
+                {
+                  "name": "repayment_method",
+                  "type": "INFERRED"
+                },
+                {
+                  "name": "portfolio_balance",
+                  "type": "INFERRED"
+                },
+                {
+                  "name": "filedeliveryentity",
+                  "type": "INFERRED"
+                },
+                {
+                  "name": "xsdversion",
+                  "type": "INFERRED"
+                },
+                {
+                  "name": "periodversion",
+                  "type": "INFERRED"
+                },
+                {
+                  "name": "deliveryset",
+                  "type": "INFERRED"
+                },
+                {
+                  "name": "redeliverynumber",
+                  "type": "INFERRED"
+                },
+                {
+                  "name": "filereportingdate",
+                  "type": "INFERRED"
+                },
+                {
+                  "name": "filereportingperiod",
+                  "type": "INFERRED"
+                }
+              ]
+            },
+            "columnLineage": {
+              "fields": {
+                "financing_product_id": {
+                  "inputFields": [
+                    {
+                      "namespace": "mdde-demo.sql_process",
+                      "name": "prp",
+                      "field": "product"
+                    }
+                  ]
+                },
+                "financing_product_ssid": {
+                  "inputFields": [
+                    {
+                      "namespace": "mdde-demo.sql_process",
+                      "name": "prp",
+                      "field": "sourcesystemidentifier"
+                    }
+                  ]
+                },
+                "repayment_method": {
+                  "inputFields": [
+                    {
+                      "namespace": "mdde-demo.sql_process",
+                      "name": "prp",
+                      "field": "repaymentmethod"
+                    }
+                  ]
+                },
+                "portfolio_balance": {
+                  "inputFields": [
+                    {
+                      "namespace": "mdde-demo.sql_process",
+                      "name": "fp",
+                      "field": "portfoliobalance"
+                    }
+                  ]
+                },
+                "filedeliveryentity": {
+                  "inputFields": [
+                    {
+                      "namespace": "mdde-demo.sql_process",
+                      "name": "prp",
+                      "field": "file_delivery_entity"
+                    }
+                  ]
+                },
+                "xsdversion": {
+                  "inputFields": [
+                    {
+                      "namespace": "mdde-demo.sql_process",
+                      "name": "prp",
+                      "field": "xsd_version"
+                    }
+                  ]
+                },
+                "periodversion": {
+                  "inputFields": [
+                    {
+                      "namespace": "mdde-demo.sql_process",
+                      "name": "prp",
+                      "field": "period_version"
+                    }
+                  ]
+                },
+                "deliveryset": {
+                  "inputFields": [
+                    {
+                      "namespace": "mdde-demo.sql_process",
+                      "name": "prp",
+                      "field": "delivery_set"
+                    }
+                  ]
+                },
+                "redeliverynumber": {
+                  "inputFields": [
+                    {
+                      "namespace": "mdde-demo.sql_process",
+                      "name": "prp",
+                      "field": "redelivery_number"
+                    }
+                  ]
+                },
+                "filereportingdate": {
+                  "inputFields": [
+                    {
+                      "namespace": "mdde-demo.sql_process",
+                      "name": "prp",
+                      "field": "file_reporting_date"
+                    }
+                  ]
+                },
+                "filereportingperiod": {
+                  "inputFields": [
+                    {
+                      "namespace": "mdde-demo.sql_process",
+                      "name": "prp",
+                      "field": "file_reporting_period"
+                    }
+                  ]
+                }
+              }
+            }
+          }
+        }
+      ]
+    },
+    {
+      "eventType": "COMPLETE",
+      "producer": "mdde-demo://examples/sql_process",
+      "schemaURL": "https://openlineage.io/spec/2-0-2/OpenLineage.json#/definitions/RunEvent",
+      "job": {
+        "namespace": "mdde-demo.sql_process",
         "name": "nested_union_except"
       },
       "inputs": [

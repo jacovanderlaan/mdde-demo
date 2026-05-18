@@ -2140,6 +2140,7 @@ def _push_column_name(proj: exp.Expression, fallback_idx: int) -> Tuple[str, int
 def push_projections_to_source_ctes(
     sql: str,
     findings: List[QualityFinding],
+    metadata_blacklist: Optional[List[str]] = None,
 ) -> Tuple[str, List[QualityFinding]]:
     """Rewrite the outermost SELECT so that single-table projections
     and filters move into ``<table>_filtered`` / ``<table>_prepared``
@@ -2147,7 +2148,18 @@ def push_projections_to_source_ctes(
 
     Safe-by-default: anything ambiguous, cross-table, aggregate,
     windowed, or sourced from an existing CTE is left in place.
+
+    ``metadata_blacklist`` (when provided) filters out blacklisted
+    columns from the source CTE's "expose these too" pass, so a
+    metadata column referenced anywhere in the AST (a leftover WHERE
+    in another CTE, a JOIN ON elsewhere, etc.) doesn't get
+    re-introduced into the source CTE we're building.
     """
+    _meta_lower = (
+        {b.lower() for b in metadata_blacklist}
+        if metadata_blacklist
+        else set()
+    )
     try:
         statements = sqlglot.parse(sql, read=None)
     except (sqlglot.errors.ParseError, sqlglot.errors.TokenError):
@@ -2360,12 +2372,17 @@ def push_projections_to_source_ctes(
         # for mutating an existing passthrough CTE.
         cte_projections: List[exp.Expression] = []
         already_projected: Set[str] = set()
+        # Also dedupe against case-insensitive duplicates so a column
+        # already projected as ``PortfolioBalance`` doesn't get
+        # exposed again as ``portfoliobalance``.
+        already_projected_lower: Set[str] = set()
         for original, col_name in plan.projections:
             inner = _strip_alias(original, plan.alias)
             if isinstance(original, exp.Alias) or not _is_simple_column_named(inner, col_name):
                 inner = exp.alias_(inner, col_name)
             cte_projections.append(inner)
             already_projected.add(col_name)
+            already_projected_lower.add(col_name.lower())
 
         # Find every column the OUTER query references via this alias
         # (in projections, JOIN ON, WHERE, etc.). For each such
@@ -2378,10 +2395,17 @@ def push_projections_to_source_ctes(
         # different output name.
         referenced_columns = _collect_alias_columns(target, plan.alias)
         for col_name in sorted(referenced_columns):
-            if col_name in already_projected:
+            if col_name in already_projected or col_name.lower() in already_projected_lower:
+                continue
+            # Skip metadata columns — they may still be referenced
+            # in leftover predicates / other CTEs that the strip pass
+            # didn't touch, but they should never resurface in a
+            # source CTE's output.
+            if col_name.lower() in _meta_lower:
                 continue
             cte_projections.append(exp.column(col_name))
             already_projected.add(col_name)
+            already_projected_lower.add(col_name.lower())
 
         # If we still have zero columns (e.g., the alias is only used
         # in a JOIN ON condition that itself got rewritten away),
@@ -2568,15 +2592,61 @@ def _passthrough_cte_target(
 
 def _collect_alias_columns(node: exp.Expression, alias: str) -> Set[str]:
     """Return the set of column names referenced as ``<alias>.<col>``
-    anywhere under ``node``. Used by the projection-pushdown transform
-    to expose exactly the columns the outer query reads from a per-
-    source CTE — no more `SELECT *` placeholders."""
+    in ``node``'s OWN scope — that is, in its projection list,
+    WHERE / GROUP BY / HAVING / QUALIFY / ORDER BY clauses, and the
+    JOIN ON conditions directly attached to it. References inside
+    other CTE bodies attached via ``with_`` are NOT counted — those
+    have their own scope and (often) a same-named alias that means
+    something different in their context.
+
+    Used by the projection-pushdown transform to expose exactly the
+    columns the outer query reads from a per-source CTE — no more
+    `SELECT *` placeholders.
+    """
     out: Set[str] = set()
     if alias is None:
         return out
-    for col in node.find_all(exp.Column):
-        if col.table == alias and col.name:
-            out.add(col.name)
+
+    def _add_from(expr: Optional[exp.Expression]) -> None:
+        if expr is None:
+            return
+        for col in expr.find_all(exp.Column):
+            # Skip columns that live inside a CTE body — that's a
+            # different scope, even if the alias name matches.
+            cur = col.parent
+            in_other_cte = False
+            while cur is not None and cur is not expr:
+                if isinstance(cur, exp.CTE):
+                    in_other_cte = True
+                    break
+                cur = cur.parent
+            if in_other_cte:
+                continue
+            if col.table == alias and col.name:
+                out.add(col.name)
+
+    # Only walk the OWN slots of ``node`` — projections, WHERE,
+    # GROUP / HAVING / QUALIFY / ORDER, FROM/JOIN. Skip ``with_``
+    # which holds OTHER CTEs.
+    if isinstance(node, exp.Select):
+        for proj in node.expressions or []:
+            _add_from(proj)
+        _add_from(node.args.get("where"))
+        _add_from(node.args.get("group"))
+        _add_from(node.args.get("having"))
+        _add_from(node.args.get("qualify"))
+        _add_from(node.args.get("order"))
+        # FROM/JOIN ON references — those legitimately reference
+        # the source we're pushing down to.
+        from_clause = node.args.get("from_") or node.args.get("from")
+        _add_from(from_clause)
+        for join in node.args.get("joins") or []:
+            _add_from(join)
+    else:
+        # Fallback: walk the whole subtree (legacy callers).
+        for col in node.find_all(exp.Column):
+            if col.table == alias and col.name:
+                out.add(col.name)
     return out
 
 
@@ -4588,9 +4658,26 @@ def apply_auto_fixes(
         # CTEs are correctly excluded from pushdown targets.
         if rule_on("source_pushdown"):
             before = out
-            out, findings = push_projections_to_source_ctes(out, findings)
+            out, findings = push_projections_to_source_ctes(
+                out, findings,
+                metadata_blacklist=(
+                    cfg.metadata_blacklist
+                    if rule_on("metadata_column_strip")
+                    else None
+                ),
+            )
             if out != before:
                 log.projections_pushed = True
+
+        # Re-run the metadata-strip AFTER pushdown so any metadata
+        # columns that the source-CTE pushdown re-exposed (via the
+        # "outer references" walk over the AST) get removed from
+        # the source CTEs too. The first strip ran on the raw outer
+        # SELECT; the second cleans up after pushdown.
+        if rule_on("metadata_column_strip"):
+            out = strip_metadata_columns(
+                out, findings, cfg.metadata_blacklist, log,
+            )
 
         # Lift JOINs + non-cast single-source derivations into a
         # dedicated ``<entity>_joined`` CTE. Runs BEFORE aggregation

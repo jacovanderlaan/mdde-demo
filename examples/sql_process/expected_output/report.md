@@ -1,6 +1,6 @@
 # sql_process — run report
 
-Files processed: **36**
+Files processed: **37**
 
 ## Files
 
@@ -27,6 +27,7 @@ Files processed: **36**
 | `full_outer_with_coalesce.sql` | full_outer_with_coalesce | business | yes | 0 | 2 | 5 | 2 |
 | `having_top_spenders.sql` | having_top_spenders | business | yes | 0 | 2 | 4 | 3 |
 | `lateral_unnest.sql` | lateral_unnest | business | yes | 0 | 2 | 4 | 4 |
+| `metadata_in_subqueries.sql` | metadata_in_subqueries | business | yes | 0 | 2 | 11 | 14 |
 | `nested_union_except.sql` | nested_union_except | business | yes | 0 | 2 | 2 | 9 |
 | `order_by_aggregate.sql` | order_by_aggregate | business | yes | 0 | 2 | 4 | 3 |
 | `ordered_top_customers.sql` | ordered_top_customers | business | yes | 0 | 2 | 4 | 1 |
@@ -45,8 +46,8 @@ Files processed: **36**
 
 ## Quality findings
 
-**Total:** 200 (error=9, warning=57, info=134)  
-**Auto-fixed:** 5
+**Total:** 214 (error=9, warning=67, info=138)  
+**Auto-fixed:** 15
 
 | File | Location | Rule | Severity | Auto-fixed | Message |
 |---|---|---|---|---|---|
@@ -181,6 +182,20 @@ Files processed: **36**
 | `lateral_unnest.sql` | <file> | COMBINED_SOURCE_FILTERS | info | no | WHERE clause references columns from 2 sources (c, o2) |
 | `lateral_unnest.sql` | <file> | MISSING_SOURCE_VERSION | info | no | Filename 'lateral_unnest.sql' has fewer than 3 hyphen-separated parts; moveme... |
 | `lateral_unnest.sql` | <predicate> | SUBQUERY_NOT_LIFTED | info | no | Subquery inside Lateral left inline — non-IN/EXISTS predicate subquery; lifti... |
+| `metadata_in_subqueries.sql` | <file> | HARDCODED_DATE | info | no | Hardcoded date literal: '2026-03-31' |
+| `metadata_in_subqueries.sql` | <file> | HARDCODED_DATE | info | no | Hardcoded date literal: '2026-03-31' |
+| `metadata_in_subqueries.sql` | <file> | METADATA_COLUMN_EXPOSED | warning | yes | Metadata column 'File_Delivery_Entity' exposed in output (as 'FileDeliveryEnt... |
+| `metadata_in_subqueries.sql` | <file> | METADATA_COLUMN_EXPOSED | warning | yes | Metadata column 'XSD_Version' exposed in output (as 'XSDVersion') |
+| `metadata_in_subqueries.sql` | <file> | METADATA_COLUMN_EXPOSED | warning | yes | Metadata column 'Period_Version' exposed in output (as 'PeriodVersion') |
+| `metadata_in_subqueries.sql` | <file> | METADATA_COLUMN_EXPOSED | warning | yes | Metadata column 'Delivery_Set' exposed in output (as 'DeliverySet') |
+| `metadata_in_subqueries.sql` | <file> | METADATA_COLUMN_EXPOSED | warning | yes | Metadata column 'Redelivery_Number' exposed in output (as 'RedeliveryNumber') |
+| `metadata_in_subqueries.sql` | <file> | METADATA_COLUMN_EXPOSED | warning | yes | Metadata column 'File_Reporting_Date' exposed in output (as 'FileReportingDate') |
+| `metadata_in_subqueries.sql` | <file> | METADATA_COLUMN_EXPOSED | warning | yes | Metadata column 'File_Reporting_Period' exposed in output (as 'FileReportingP... |
+| `metadata_in_subqueries.sql` | <file> | METADATA_COLUMN_EXPOSED | warning | yes | Metadata column 'Period_Version' exposed in output |
+| `metadata_in_subqueries.sql` | <file> | METADATA_COLUMN_EXPOSED | warning | yes | Metadata column 'Delivery_Set' exposed in output |
+| `metadata_in_subqueries.sql` | <file> | METADATA_COLUMN_EXPOSED | warning | yes | Metadata column 'File_Reporting_Date' exposed in output |
+| `metadata_in_subqueries.sql` | <file> | DERIVATION_IN_WHERE | info | no | IS [NOT] NULL on raw column 'repaymentmethod' inside WHERE |
+| `metadata_in_subqueries.sql` | <file> | MISSING_SOURCE_VERSION | info | no | Filename 'metadata_in_subqueries.sql' has fewer than 3 hyphen-separated parts... |
 | `nested_union_except.sql` | <file> | MISSING_ALIAS | info | no | Table 'orders' has no alias in multi-table query |
 | `nested_union_except.sql` | <file> | MISSING_ALIAS | info | no | Table 'customer' has no alias in multi-table query |
 | `nested_union_except.sql` | <file> | MISSING_ALIAS | info | no | Table 'orders' has no alias in multi-table query |
@@ -253,7 +268,7 @@ Files processed: **36**
 
 ## Mapping coverage
 
-**193/210** output columns have a resolved source attribute (92%)
+**204/221** output columns have a resolved source attribute (92%)
 
 ## Cross-file lineage
 
@@ -304,6 +319,7 @@ flowchart LR
     full_outer_with_coalesce["full_outer_with_coalesce<br/><i>full_outer_with_coalesce.sql</i>"]
     having_top_spenders["having_top_spenders<br/><i>having_top_spenders.sql</i>"]
     lateral_unnest["lateral_unnest<br/><i>lateral_unnest.sql</i>"]
+    metadata_in_subqueries["metadata_in_subqueries<br/><i>metadata_in_subqueries.sql</i>"]
     nested_union_except["nested_union_except<br/><i>nested_union_except.sql</i>"]
     order_by_aggregate["order_by_aggregate<br/><i>order_by_aggregate.sql</i>"]
     ordered_top_customers["ordered_top_customers<br/><i>ordered_top_customers.sql</i>"]
@@ -332,8 +348,10 @@ flowchart LR
     ext_landing_crm_customers_export[("landing.crm_customers_export")]
     ext_landing_oms_orders_export[("landing.oms_orders_export")]
     ext_raw_customer[("raw.customer")]
+    ext_raw_fp[("raw.fp")]
     ext_raw_loans[("raw.loans")]
     ext_raw_orders[("raw.orders")]
+    ext_raw_prp[("raw.prp")]
   end
   ext_landing_crm_customers_export --> raw_customers
   ext_landing_oms_orders_export --> raw_orders
@@ -362,6 +380,7 @@ flowchart LR
   ext_raw_customer --> union_distinct_skipped
   ext_raw_customer --> union_with_layering
   ext_raw_customer --> window_ranked_orders
+  ext_raw_fp --> metadata_in_subqueries
   ext_raw_loans --> combo_at_risk_customers
   ext_raw_loans --> combo_filter_isolation
   ext_raw_loans --> combo_nested_predicate_subqueries
@@ -392,6 +411,7 @@ flowchart LR
   ext_raw_orders --> union_with_layering
   ext_raw_orders --> window_no_order_with_annotation
   ext_raw_orders --> window_ranked_orders
+  ext_raw_prp --> metadata_in_subqueries
 ```
 
 ## SQL-First annotations
@@ -419,6 +439,7 @@ flowchart LR
 | `full_outer_with_coalesce.sql` | full_outer_with_coalesce | 0 | — |
 | `having_top_spenders.sql` | having_top_spenders | 0 | — |
 | `lateral_unnest.sql` | lateral_unnest | 0 | — |
+| `metadata_in_subqueries.sql` | metadata_in_subqueries | 0 | — |
 | `nested_union_except.sql` | nested_union_except | 0 | — |
 | `order_by_aggregate.sql` | order_by_aggregate | 0 | — |
 | `ordered_top_customers.sql` | ordered_top_customers | 0 | — |
