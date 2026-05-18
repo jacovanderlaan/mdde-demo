@@ -6911,6 +6911,20 @@ def process_folder(
         print(f"No *.sql files found in {input_dir}", file=sys.stderr)
         return 0
 
+    # Summarise the effective config so the operator can verify the
+    # YAML they expected was actually loaded. Without this, the
+    # Databricks notebook silently ran with default config and
+    # ignored the customer's metadata_blacklist / unquoted_literals.
+    cfg_summary = (
+        f"Config: "
+        f"{len(customer_config.metadata_blacklist) if customer_config else 0} metadata col(s), "
+        f"{len(customer_config.obsolete_cte_names) if customer_config else 0} obsolete CTE(s), "
+        f"{len(opt_cfg.unquoted_literals)} unquoted literal(s)"
+    )
+    if opt_cfg.table_qualifier:
+        cfg_summary += f", table_qualifier={opt_cfg.table_qualifier!r}"
+    print(cfg_summary)
+
     metadata = load_metadata(input_dir, metadata_path)
     if metadata:
         print(

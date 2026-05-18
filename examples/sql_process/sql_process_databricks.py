@@ -94,16 +94,22 @@ dbutils.widgets.text(
     "metadata_path", "",
     "Metadata YAML (optional, blank = auto-discover input/_metadata.yaml)",
 )
+dbutils.widgets.text(
+    "config_path", "",
+    "Pipeline YAML config (blank = auto-discover <module_dir>/sql_process.config.yaml)",
+)
 
 input_dir = dbutils.widgets.get("input_dir")
 output_dir = dbutils.widgets.get("output_dir")
 recursive = dbutils.widgets.get("recursive") == "true"
 metadata_path = dbutils.widgets.get("metadata_path") or None
+config_path = dbutils.widgets.get("config_path") or None
 
 print(f"Input:     {input_dir}")
 print(f"Output:    {output_dir}")
 print(f"Recursive: {recursive}")
 print(f"Metadata:  {metadata_path or '(auto-discover)'}")
+print(f"Config:    {config_path or '(auto-discover)'}")
 
 # COMMAND ----------
 
@@ -113,13 +119,28 @@ print(f"Metadata:  {metadata_path or '(auto-discover)'}")
 # COMMAND ----------
 
 from pathlib import Path
-from sql_process import process_folder
+from sql_process import process_folder, load_config
+
+# Load the YAML config so every transform sees the right rule list
+# (metadata_blacklist, unquoted_literals, per-rule toggles, etc.).
+# Without this the notebook silently used built-in defaults and
+# ignored the customer YAML.
+cfg = load_config(Path(config_path) if config_path else None)
+print(
+    f"Config:    {len(cfg.rules.metadata_blacklist)} metadata column(s), "
+    f"{len(cfg.optimize.unquoted_literals)} unquoted literal(s)"
+)
 
 n = process_folder(
     Path(input_dir),
     Path(output_dir),
     recursive=recursive,
     metadata_path=Path(metadata_path) if metadata_path else None,
+    movement_config=cfg.movement,
+    customer_config=cfg.rules,
+    output_config=cfg.outputs,
+    optimize_config=cfg.optimize,
+    file_config=cfg.files,
 )
 print(f"Processed {n} file(s) -> {output_dir}")
 
