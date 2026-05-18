@@ -12,6 +12,7 @@
 
 /*
 Migration Details:
+- sql_process Version: 192caf00 (2026-05-18)
 - Original SQL File: combo_filter_isolation.sql
 - Target SQL File:  optimized.sql
 - Summary of Changes:

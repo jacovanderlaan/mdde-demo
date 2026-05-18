@@ -1,5 +1,6 @@
 # sql_process — run report
 
+Version: `192caf00 (2026-05-18)`
 Files processed: **38**
 
 ## Files

@@ -58,6 +58,40 @@ _HERE = (
     os.path.dirname(os.path.abspath(__file__))
     if "__file__" in globals() else os.getcwd()
 )
+
+
+# -----------------------------------------------------------------------------
+# Version stamp
+# -----------------------------------------------------------------------------
+#
+# Updated by the commit-message script in ``scripts/stamp_version.py``
+# at commit time. The auto-update line below should always be present
+# — its presence is what tells the customer-site verifier the file
+# was actually replaced.
+#
+# Format: ``<short-sha> (<UTC commit date>)``.
+# When you edit the file locally without committing, this stamp may
+# lag behind your changes — `--version` still prints both the stamp
+# and the file's mtime so you can spot drift.
+__version__ = "192caf00 (2026-05-18)"  # auto-updated on commit  ## STAMP-MARKER ##
+def _version_string() -> str:
+    """Return a human-readable version banner.
+
+    Shows the embedded ``__version__`` plus the file's mtime so a
+    customer-site operator can verify the file was actually replaced.
+    Falls back gracefully when ``__file__`` isn't available.
+    """
+    parts: List[str] = [f"sql_process {__version__}"]
+    try:
+        if "__file__" in globals():
+            mtime = datetime.fromtimestamp(
+                os.path.getmtime(__file__), tz=timezone.utc,
+            )
+            parts.append(f"file mtime {mtime.strftime('%Y-%m-%d %H:%M:%S UTC')}")
+            parts.append(f"path {os.path.abspath(__file__)}")
+    except Exception:  # noqa: BLE001 — fail-soft
+        pass
+    return "\n".join(parts)
 if _HERE not in sys.path:
     sys.path.insert(0, _HERE)
 
@@ -4591,6 +4625,7 @@ def emit_comment_header(
     lines: List[str] = []
     lines.append("/*")
     lines.append("Migration Details:")
+    lines.append(f"- sql_process Version: {__version__}")
     lines.append(f"- Original SQL File: {pf.path.name}")
     lines.append(f"- Target SQL File:  {output_filename}")
     lines.append("- Summary of Changes:")
@@ -6347,6 +6382,7 @@ def emit_report(
     lines: List[str] = []
     lines.append("# sql_process — run report")
     lines.append("")
+    lines.append(f"Version: `{__version__}`")
     lines.append(f"Files processed: **{len(parsed_files)}**")
     lines.append("")
 
@@ -7110,7 +7146,21 @@ def main(argv: Optional[List[str]] = None) -> int:
             "scaling to thousands of files."
         ),
     )
+    parser.add_argument(
+        "--version",
+        action="store_true",
+        help=(
+            "Print the embedded version (git short SHA + commit date) "
+            "and the file's modification time, then exit. Use this to "
+            "verify the customer-site copy is up to date."
+        ),
+    )
     args = parser.parse_args(argv)
+
+    # Handle --version BEFORE any other work — emit and exit cleanly.
+    if args.version:
+        print(_version_string())
+        return 0
 
     # Load YAML config FIRST so its `run` section can supply
     # input_dir / output_dir / recursive when the CLI omits them.

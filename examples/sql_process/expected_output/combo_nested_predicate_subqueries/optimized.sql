@@ -9,6 +9,7 @@
 
 /*
 Migration Details:
+- sql_process Version: 192caf00 (2026-05-18)
 - Original SQL File: combo_nested_predicate_subqueries.sql
 - Target SQL File:  optimized.sql
 - Summary of Changes:

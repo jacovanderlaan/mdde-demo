@@ -5,6 +5,7 @@
 
 /*
 Migration Details:
+- sql_process Version: 192caf00 (2026-05-18)
 - Original SQL File: customer_latest_orders.sql
 - Target SQL File:  optimized.sql
 - Summary of Changes:

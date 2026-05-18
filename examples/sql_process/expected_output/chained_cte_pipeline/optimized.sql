@@ -7,6 +7,7 @@
 
 /*
 Migration Details:
+- sql_process Version: 192caf00 (2026-05-18)
 - Original SQL File: chained_cte_pipeline.sql
 - Target SQL File:  optimized.sql
 - Summary of Changes:
