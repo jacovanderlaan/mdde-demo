@@ -4363,18 +4363,30 @@ def strip_metadata_columns(
     findings: List[QualityFinding],
     metadata_blacklist: List[str],
     log: TransformLog,
+    select_blacklist: Optional[List[str]] = None,
+    where_blacklist: Optional[List[str]] = None,
+    join_blacklist: Optional[List[str]] = None,
 ) -> str:
     """Rule 4 / 13: remove blacklisted metadata columns from every
     SELECT's projections, from every WHERE predicate, AND from every
     JOIN ON predicate. If a WHERE / JOIN ON ends up empty, drop the
     whole clause.
 
+    Each context can have its OWN blacklist. ``select_blacklist`` /
+    ``where_blacklist`` / ``join_blacklist`` (when not None) override
+    the default ``metadata_blacklist`` for that context. ``None``
+    means "use ``metadata_blacklist``"; ``[]`` means "strip nothing
+    in this context".
+
     Conservative: only strips exact name matches (case-insensitive)
     on bare or qualified column references. Predicates that touch a
     metadata column on either operand are dropped wholesale —
     including ``prp.snapshot_date = fp.snapshot_date`` join keys.
     """
-    if not metadata_blacklist:
+    sel_list = select_blacklist if select_blacklist is not None else metadata_blacklist
+    whr_list = where_blacklist if where_blacklist is not None else metadata_blacklist
+    jn_list = join_blacklist if join_blacklist is not None else metadata_blacklist
+    if not (sel_list or whr_list or jn_list):
         return sql
     try:
         statements = sqlglot.parse(sql, read=None)
@@ -4383,48 +4395,51 @@ def strip_metadata_columns(
     if not statements or statements[0] is None:
         return sql
 
-    blacklist = {b.lower() for b in metadata_blacklist}
+    sel_set = {b.lower() for b in (sel_list or [])}
+    whr_set = {b.lower() for b in (whr_list or [])}
+    jn_set = {b.lower() for b in (jn_list or [])}
     stripped_columns: Set[str] = set()
 
-    def _matches_metadata(node: exp.Expression) -> Optional[str]:
-        """Return the metadata-column name if ``node`` is a (possibly
-        qualified) Column reference to one. Else None."""
+    def _matches(blacklist_set: Set[str], node: exp.Expression) -> Optional[str]:
+        """Return the column name if ``node`` is a (possibly
+        qualified) Column reference whose name is in the given set."""
         col = node
         if isinstance(col, exp.Alias):
             col = col.this
-        if isinstance(col, exp.Column) and col.name.lower() in blacklist:
+        if isinstance(col, exp.Column) and col.name.lower() in blacklist_set:
             return col.name
         return None
 
-    def _predicate_touches_metadata(pred: exp.Expression) -> Optional[str]:
-        """Return the metadata column name if a leaf predicate
-        references one (in either operand or via IS [NOT] NULL).
-        Walks the whole predicate subtree so qualified refs on either
-        side of an equality (``prp.snapshot_date = fp.snapshot_date``)
-        are caught."""
+    def _predicate_touches(
+        blacklist_set: Set[str], pred: exp.Expression,
+    ) -> Optional[str]:
+        """Return the column name if a leaf predicate references a
+        column in ``blacklist_set`` (either side of an equality, IN
+        list, or IS [NOT] NULL)."""
         if isinstance(pred, (exp.EQ, exp.NEQ, exp.GT, exp.GTE, exp.LT, exp.LTE, exp.Like, exp.In)):
             for col in pred.find_all(exp.Column):
-                if col.name.lower() in blacklist:
+                if col.name.lower() in blacklist_set:
                     return col.name
             return None
         if isinstance(pred, exp.Is):
-            m = _matches_metadata(pred.this)
+            m = _matches(blacklist_set, pred.this)
             if m:
                 return m
         return None
 
     def _strip_predicate_tree(
+        blacklist_set: Set[str],
         clause: Optional[exp.Expression],
     ) -> Tuple[Optional[exp.Expression], bool]:
-        """Split an AND-tree into leaves, drop ones touching metadata,
-        rebuild. Returns ``(new_tree_or_None, changed)``."""
-        if clause is None:
-            return None, False
+        """Split an AND-tree into leaves, drop ones touching the
+        context-specific blacklist, rebuild."""
+        if clause is None or not blacklist_set:
+            return clause, False
         parts = _split_and(clause)
         kept_parts: List[exp.Expression] = []
         changed = False
         for p in parts:
-            m = _predicate_touches_metadata(p)
+            m = _predicate_touches(blacklist_set, p)
             if m is not None:
                 stripped_columns.add(m)
                 changed = True
@@ -4439,28 +4454,26 @@ def strip_metadata_columns(
             continue
         # 1. Strip metadata-column projections from every SELECT.
         for select in list(stmt.find_all(exp.Select)):
-            kept_projections: List[exp.Expression] = []
-            for proj in select.expressions:
-                m = _matches_metadata(proj)
-                if m is not None:
-                    stripped_columns.add(m)
-                    continue
-                kept_projections.append(proj)
-            if kept_projections != list(select.expressions):
-                if not kept_projections:
-                    # Don't produce a SELECT with zero projections —
-                    # leave at least one column in place. Restore the
-                    # last metadata projection so the SELECT stays valid.
-                    kept_projections = [select.expressions[-1]]
-                    stripped_columns.discard(
-                        _matches_metadata(select.expressions[-1]) or ""
-                    )
-                select.set("expressions", kept_projections)
+            if sel_set:
+                kept_projections: List[exp.Expression] = []
+                for proj in select.expressions:
+                    m = _matches(sel_set, proj)
+                    if m is not None:
+                        stripped_columns.add(m)
+                        continue
+                    kept_projections.append(proj)
+                if kept_projections != list(select.expressions):
+                    if not kept_projections:
+                        kept_projections = [select.expressions[-1]]
+                        stripped_columns.discard(
+                            _matches(sel_set, select.expressions[-1]) or ""
+                        )
+                    select.set("expressions", kept_projections)
 
             # 2. Strip metadata-column predicates from WHERE.
             where = select.args.get("where")
             if where is not None and where.this is not None:
-                new_where, changed = _strip_predicate_tree(where.this)
+                new_where, changed = _strip_predicate_tree(whr_set, where.this)
                 if changed:
                     if new_where is None:
                         select.set("where", None)
@@ -4470,7 +4483,7 @@ def strip_metadata_columns(
             # 3. Strip metadata-column predicates from every JOIN ON.
             for join in select.args.get("joins") or []:
                 on = join.args.get("on")
-                new_on, changed = _strip_predicate_tree(on)
+                new_on, changed = _strip_predicate_tree(jn_set, on)
                 if not changed:
                     continue
                 if new_on is None:
@@ -4753,9 +4766,15 @@ def apply_auto_fixes(
             out = remove_obsolete_ctes(out, findings, cfg.obsolete_cte_names, log)
 
         # Customer rule 4 / 13: strip metadata columns from SELECT
-        # projections AND from WHERE predicates.
+        # projections, WHERE predicates, and JOIN ON conditions —
+        # each with its own (effective) blacklist.
         if rule_on("metadata_column_strip"):
-            out = strip_metadata_columns(out, findings, cfg.metadata_blacklist, log)
+            out = strip_metadata_columns(
+                out, findings, cfg.metadata_blacklist, log,
+                select_blacklist=cfg.metadata_select_blacklist,
+                where_blacklist=cfg.metadata_where_blacklist,
+                join_blacklist=cfg.metadata_join_blacklist,
+            )
 
         # Lift inline subqueries into named CTEs (in-scope shapes only).
         # Done before format-normalisation so the final pretty-print covers
@@ -4809,10 +4828,13 @@ def apply_auto_fixes(
         # CTEs are correctly excluded from pushdown targets.
         if rule_on("source_pushdown"):
             before = out
+            # Pushdown filters its "expose referenced columns" pass
+            # against the SELECT blacklist (since pushdown decides
+            # what ends up in the source CTE's projection list).
             out, findings = push_projections_to_source_ctes(
                 out, findings,
                 metadata_blacklist=(
-                    cfg.metadata_blacklist
+                    cfg.effective_select_blacklist()
                     if rule_on("metadata_column_strip")
                     else None
                 ),
@@ -4828,6 +4850,9 @@ def apply_auto_fixes(
         if rule_on("metadata_column_strip"):
             out = strip_metadata_columns(
                 out, findings, cfg.metadata_blacklist, log,
+                select_blacklist=cfg.metadata_select_blacklist,
+                where_blacklist=cfg.metadata_where_blacklist,
+                join_blacklist=cfg.metadata_join_blacklist,
             )
 
         # Lift JOINs + non-cast single-source derivations into a
@@ -5560,6 +5585,18 @@ class CustomerRuleConfig:
     only in ``sql_process.config.yaml`` so that running with a
     different YAML (or ``--config none``) doesn't silently pollute the
     metadata blacklist.
+
+    ``metadata_blacklist`` is the DEFAULT list applied to all three
+    contexts (SELECT projections, WHERE predicates, JOIN ON
+    conditions). For finer control, set any of:
+
+      ``metadata_select_blacklist``  — overrides the SELECT context
+      ``metadata_where_blacklist``   — overrides the WHERE context
+      ``metadata_join_blacklist``    — overrides the JOIN ON context
+
+    A ``None`` value (key omitted from YAML) means "fall back to
+    metadata_blacklist". An explicit empty list ``[]`` means "strip
+    nothing in this context".
     """
     legacy_schemas: List[str] = field(default_factory=list)
     replacement_schema: str = "automatically_inferred_qualifier"
@@ -5571,7 +5608,35 @@ class CustomerRuleConfig:
         "current_flag", "delete_flag", "delta_flag",
         "create_timestamp", "start_dts", "end_dts",
     ])
+    # Per-context overrides. None = use ``metadata_blacklist``.
+    metadata_select_blacklist: Optional[List[str]] = None
+    metadata_where_blacklist: Optional[List[str]] = None
+    metadata_join_blacklist: Optional[List[str]] = None
     obsolete_cte_names: List[str] = field(default_factory=list)
+
+    # Effective lists per context — fall back to metadata_blacklist
+    # when no override is set. Used by callers; the underlying YAML
+    # values stay as configured.
+    def effective_select_blacklist(self) -> List[str]:
+        return (
+            list(self.metadata_select_blacklist)
+            if self.metadata_select_blacklist is not None
+            else list(self.metadata_blacklist)
+        )
+
+    def effective_where_blacklist(self) -> List[str]:
+        return (
+            list(self.metadata_where_blacklist)
+            if self.metadata_where_blacklist is not None
+            else list(self.metadata_blacklist)
+        )
+
+    def effective_join_blacklist(self) -> List[str]:
+        return (
+            list(self.metadata_join_blacklist)
+            if self.metadata_join_blacklist is not None
+            else list(self.metadata_blacklist)
+        )
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -5579,6 +5644,18 @@ class CustomerRuleConfig:
             "replacement_schema": self.replacement_schema,
             "date_variable": self.date_variable,
             "metadata_blacklist": list(self.metadata_blacklist),
+            "metadata_select_blacklist": (
+                list(self.metadata_select_blacklist)
+                if self.metadata_select_blacklist is not None else None
+            ),
+            "metadata_where_blacklist": (
+                list(self.metadata_where_blacklist)
+                if self.metadata_where_blacklist is not None else None
+            ),
+            "metadata_join_blacklist": (
+                list(self.metadata_join_blacklist)
+                if self.metadata_join_blacklist is not None else None
+            ),
             "obsolete_cte_names": list(self.obsolete_cte_names),
         }
 
@@ -5747,6 +5824,22 @@ def load_config(path: Optional[Path]) -> PipelineConfig:
             )
             return default
 
+        # Per-context blacklists (None = "use metadata_blacklist as
+        # the default"; explicit [] = "strip nothing in this context").
+        def _coerce_optional_list(key: str, value: Any) -> Optional[List[str]]:
+            if value is None:
+                return None
+            if isinstance(value, list):
+                return [str(x) for x in value]
+            print(
+                f"Config: rules.{key} should be a list (or omitted), "
+                f"got {type(value).__name__} — ignoring.",
+                file=sys.stderr,
+            )
+            return None
+        msb_raw = rl.get("metadata_select_blacklist")
+        mwb_raw = rl.get("metadata_where_blacklist")
+        mjb_raw = rl.get("metadata_join_blacklist")
         cfg.rules = CustomerRuleConfig(
             legacy_schemas=(
                 [str(x) for x in ls_raw]
@@ -5768,6 +5861,15 @@ def load_config(path: Optional[Path]) -> PipelineConfig:
                 if isinstance(mb_raw, list)
                 else list(cfg.rules.metadata_blacklist) if mb_raw is None
                 else []
+            ),
+            metadata_select_blacklist=_coerce_optional_list(
+                "metadata_select_blacklist", msb_raw,
+            ),
+            metadata_where_blacklist=_coerce_optional_list(
+                "metadata_where_blacklist", mwb_raw,
+            ),
+            metadata_join_blacklist=_coerce_optional_list(
+                "metadata_join_blacklist", mjb_raw,
             ),
             obsolete_cte_names=(
                 [str(x) for x in ob_raw]
@@ -6989,10 +7091,28 @@ def process_folder(
     # YAML they expected was actually loaded. Without this, the
     # Databricks notebook silently ran with default config and
     # ignored the customer's metadata_blacklist / unquoted_literals.
+    if customer_config:
+        base_n = len(customer_config.metadata_blacklist)
+        sel_n = len(customer_config.effective_select_blacklist())
+        whr_n = len(customer_config.effective_where_blacklist())
+        jn_n = len(customer_config.effective_join_blacklist())
+        # Only show per-context breakdown when at least one override
+        # diverges from the base list — keeps the line readable for
+        # the common case where all three contexts use the same list.
+        if sel_n == base_n and whr_n == base_n and jn_n == base_n:
+            meta_summary = f"{base_n} metadata col(s)"
+        else:
+            meta_summary = (
+                f"{base_n} metadata col(s) "
+                f"[select={sel_n}, where={whr_n}, join={jn_n}]"
+            )
+        obs_n = len(customer_config.obsolete_cte_names)
+    else:
+        meta_summary = "0 metadata col(s)"
+        obs_n = 0
     cfg_summary = (
-        f"Config: "
-        f"{len(customer_config.metadata_blacklist) if customer_config else 0} metadata col(s), "
-        f"{len(customer_config.obsolete_cte_names) if customer_config else 0} obsolete CTE(s), "
+        f"Config: {meta_summary}, "
+        f"{obs_n} obsolete CTE(s), "
         f"{len(opt_cfg.unquoted_literals)} unquoted literal(s)"
     )
     if opt_cfg.table_qualifier:

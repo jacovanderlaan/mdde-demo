@@ -776,6 +776,110 @@ class TestMetadataStrippingFromJoinOn:
         assert "a.code = b.code" in out.replace('"', '')
 
 
+class TestPerContextMetadataBlacklists:
+    """F22: per-context blacklists let one column be stripped from
+    the SELECT projection while remaining valid in WHERE / JOIN ON.
+
+    Typical use: ``file_delivery_entity`` is a join key on a multi-
+    source feed but should not appear in the target projection."""
+
+    def test_select_only_strip_keeps_where_predicate(self):
+        from sql_process import strip_metadata_columns
+        sql = (
+            "SELECT id, file_delivery_entity FROM t "
+            "WHERE file_delivery_entity = 'GRIP' AND id > 0"
+        )
+        log = TransformLog()
+        out = strip_metadata_columns(
+            sql, [], ["file_delivery_entity"], log,
+            select_blacklist=["file_delivery_entity"],
+            where_blacklist=[],          # keep WHERE predicate intact
+            join_blacklist=[],
+        )
+        # Stripped from projection
+        assert ", file_delivery_entity" not in out.lower().split("from")[0]
+        # Kept in WHERE
+        assert "file_delivery_entity" in out.lower()
+        assert "id > 0" in out
+
+    def test_select_only_strip_keeps_join_on(self):
+        from sql_process import strip_metadata_columns
+        sql = (
+            "SELECT a.id, a.file_delivery_entity FROM a "
+            "LEFT JOIN b ON a.id = b.id "
+            "AND a.file_delivery_entity = b.file_delivery_entity"
+        )
+        log = TransformLog()
+        out = strip_metadata_columns(
+            sql, [], ["file_delivery_entity"], log,
+            select_blacklist=["file_delivery_entity"],
+            where_blacklist=[],
+            join_blacklist=[],            # keep JOIN ON predicate intact
+        )
+        # Stripped from projection — only the FROM-side count goes from
+        # 2 down to 0; the JOIN ON still references the column twice.
+        before_from = out.lower().split("from")[0]
+        assert "file_delivery_entity" not in before_from
+        # Kept in JOIN ON
+        assert "file_delivery_entity = b.file_delivery_entity" in out.lower().replace('"', '')
+
+    def test_default_falls_back_to_metadata_blacklist(self):
+        """When per-context lists are None, behaviour matches the
+        single-list legacy behaviour: strip from all three contexts."""
+        from sql_process import strip_metadata_columns
+        sql = (
+            "SELECT id, current_flag FROM t "
+            "WHERE current_flag = 'Y' AND id > 0"
+        )
+        log = TransformLog()
+        out = strip_metadata_columns(
+            sql, [], ["current_flag"], log,
+            # All None -> use the single metadata_blacklist.
+        )
+        assert "current_flag" not in out
+        assert "id > 0" in out
+
+    def test_empty_per_context_list_strips_nothing_in_that_context(self):
+        """Explicit ``[]`` for a context means strip nothing there,
+        even when the column is in ``metadata_blacklist``."""
+        from sql_process import strip_metadata_columns
+        sql = "SELECT id, snapshot_date FROM t WHERE snapshot_date = '2026-01-01'"
+        log = TransformLog()
+        out = strip_metadata_columns(
+            sql, [], ["snapshot_date"], log,
+            select_blacklist=[],         # keep in SELECT
+            where_blacklist=["snapshot_date"],  # strip from WHERE
+            join_blacklist=["snapshot_date"],
+        )
+        assert "snapshot_date" in out.lower().split("from")[0]
+        # WHERE removed entirely (only predicate was on metadata col)
+        from_clause = out.lower().split("from", 1)[1]
+        assert "where" not in from_clause
+
+
+class TestCustomerRuleConfigEffectiveLists:
+    """The helper accessors should return the per-context list when
+    set, and fall back to ``metadata_blacklist`` when ``None``."""
+
+    def test_all_none_returns_base_list(self):
+        from sql_process import CustomerRuleConfig
+        cfg = CustomerRuleConfig(metadata_blacklist=["a", "b"])
+        assert cfg.effective_select_blacklist() == ["a", "b"]
+        assert cfg.effective_where_blacklist() == ["a", "b"]
+        assert cfg.effective_join_blacklist() == ["a", "b"]
+
+    def test_per_context_override_takes_priority(self):
+        from sql_process import CustomerRuleConfig
+        cfg = CustomerRuleConfig(
+            metadata_blacklist=["a", "b"],
+            metadata_select_blacklist=["a"],
+            metadata_join_blacklist=[],
+        )
+        assert cfg.effective_select_blacklist() == ["a"]
+        assert cfg.effective_where_blacklist() == ["a", "b"]  # falls back
+        assert cfg.effective_join_blacklist() == []           # explicit empty
+
+
 class TestCommentBannerStripping:
 
     def test_strips_conversion_summary_banner(self):

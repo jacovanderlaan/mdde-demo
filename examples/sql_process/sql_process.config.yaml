@@ -94,6 +94,20 @@ rules:
     - xsd_version
     - redelivery_number
 
+  # Per-context blacklist overrides. Each list, when present, REPLACES
+  # `metadata_blacklist` for that context. Omit a key (or set to null)
+  # to fall back to `metadata_blacklist`. Set explicitly to `[]` to
+  # strip nothing in that context.
+  #
+  # Use this when a column should be kept in some contexts but not
+  # others. Example: keep `file_delivery_entity` as a JOIN key
+  # (don't drop equality predicates on it) but still strip it from
+  # the SELECT projection list.
+  #
+  # metadata_select_blacklist:    # null = use metadata_blacklist
+  # metadata_where_blacklist:     # null = use metadata_blacklist
+  # metadata_join_blacklist:      # null = use metadata_blacklist
+
 
 # =============================================================================
 # Optimized-SQL rewriting
